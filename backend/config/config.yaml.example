@@ -1,0 +1,73 @@
+# Stars Admin 后端配置文件示例
+# 请复制此文件为 config.yaml 并根据实际情况修改配置
+
+# 服务配置
+server:
+  port: 8080
+  mode: debug  # debug, release, test
+  
+# 数据库配置
+database:
+  type: mysql  # mysql, postgresql
+  host: localhost
+  port: 3306
+  username: root
+  password: your_password_here
+  database: stars_admin
+  charset: utf8mb4
+  max_idle_conns: 10
+  max_open_conns: 100
+  max_lifetime: 3600  # 秒
+  
+# Redis 配置
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+  pool_size: 10
+  
+# JWT 配置
+jwt:
+  secret: your-jwt-secret-key-here
+  expires_time: 7200  # 秒，2小时
+  
+# 日志配置
+log:
+  level: info  # debug, info, warn, error
+  file_path: "./logs/app.log"
+  max_size: 100  # MB
+  max_backups: 3
+  max_age: 7  # 天
+  compress: true
+  
+# 文件上传配置
+upload:
+  max_size: 10485760  # 10MB
+  allowed_types: ["jpg", "jpeg", "png", "gif", "pdf", "doc", "docx"]
+  upload_path: "./uploads"
+  
+# 邮件配置
+email:
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  username: your-email@gmail.com
+  password: your-email-password
+  from_name: Stars Admin
+  
+# 安全配置
+security:
+  cors:
+    allowed_origins: ["http://localhost:3000", "http://localhost:5173"]
+    allowed_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+    allowed_headers: ["Origin", "Content-Type", "Authorization"]
+    allow_credentials: true
+  rate_limit:
+    enabled: true
+    requests_per_minute: 100
+    
+# 监控配置
+monitoring:
+  enabled: true
+  metrics_path: "/metrics"
+  health_check_path: "/health"

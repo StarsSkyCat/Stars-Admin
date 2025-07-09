@@ -1,0 +1,189 @@
+# ===================
+# 前端 (Frontend)
+# ===================
+
+# 依赖
+frontend/node_modules/
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
+frontend/lerna-debug.log*
+
+# 构建输出
+frontend/dist/
+frontend/build/
+frontend/dist-ssr/
+frontend/*.local
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 环境变量
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# 日志
+frontend/logs/
+frontend/*.log
+
+# Runtime data
+frontend/pids/
+frontend/*.pid
+frontend/*.seed
+frontend/*.pid.lock
+
+# Coverage directory used by tools like istanbul
+frontend/coverage/
+frontend/*.lcov
+
+# nyc test coverage
+frontend/.nyc_output/
+
+# ===================
+# 后端 (Backend)
+# ===================
+
+# 二进制文件
+backend/stars-admin
+backend/cmd/migrate/migrate
+backend/cmd/main/main
+
+# 编译输出
+backend/*.exe
+backend/*.exe~
+backend/*.dll
+backend/*.so
+backend/*.dylib
+
+# 测试输出
+backend/*.test
+backend/*.out
+
+# Go 工作区文件
+backend/go.work
+backend/go.work.sum
+
+# 日志文件
+backend/*.log
+backend/logs/
+
+# 配置文件（包含敏感信息）
+backend/config/config.yaml
+backend/config/config.yml
+backend/config/config.json
+
+# 数据库文件
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+
+# 缓存文件
+backend/.cache/
+backend/tmp/
+backend/temp/
+
+# 备份文件
+backend/*.bak
+backend/*.backup
+
+# 依赖目录
+backend/vendor/
+
+# 上传文件
+backend/uploads/
+backend/static/uploads/
+
+# 构建输出
+backend/dist/
+backend/build/
+
+# ===================
+# 通用 (Common)
+# ===================
+
+# 环境变量
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 日志
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.temp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 文档生成
+docs/generated/
+
+# 部署相关
+.deploy/
+deployment/secrets/
+
+# 测试覆盖率
+coverage/
+*.lcov
+
+# 依赖分析
+.dependency-cruiser.json
+
+# ===================
+# Docker
+# ===================
+
+# Docker 相关
+.dockerignore
+*.dockerfile.bak
+
+# ===================
+# 安全和敏感信息
+# ===================
+
+# 密钥和证书
+*.key
+*.pem
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# 配置文件中的敏感信息
+**/config/secrets.yaml
+**/config/secrets.yml
+**/config/secrets.json
+
+# 数据库连接信息
+**/config/database.yaml
+**/config/database.yml
+**/config/database.json
+
+# API 密钥
+**/config/api-keys.yaml
+**/config/api-keys.yml
+**/config/api-keys.json
