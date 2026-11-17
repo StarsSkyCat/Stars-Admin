@@ -1,0 +1,2 @@
+// ID 在 HTTP 中使用十进制字符串，保留分页 total 等普通整数类型。
+replace github.com/StarsSkyCat/Stars-Admin/internal/core/model.ID string

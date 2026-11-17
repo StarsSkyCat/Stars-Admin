@@ -35,6 +35,8 @@ jwt:
   access_ttl: 30m
   refresh_ttl: 168h
   issuer: stars-admin
+auth:
+  bcrypt_cost: 10
 log:
   level: debug
   format: console

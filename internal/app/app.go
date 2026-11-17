@@ -31,6 +31,7 @@ type App struct {
 	router  *gin.Engine
 	ready   atomic.Bool
 	cleanup server.Cleanup
+	system  *sys.Module
 }
 
 // New 任意初始化步骤失败时按逆序释放已获得资源。
@@ -64,7 +65,12 @@ func New(ctx context.Context, cfg *config.Config, log *zap.Logger) (application 
 		return nil, err
 	}
 	deps := core.Deps{Config: cfg, DB: a.db.ORM, Redis: a.cache, Logger: log, IDs: ids}
-	a.router, err = NewRouter(cfg, log, a.cache, a.Ready, sys.New(deps), job.New(deps), gen.New(deps))
+	a.system, err = sys.New(ctx, deps)
+	if err != nil {
+		return nil, err
+	}
+	a.cleanup.Add(a.system.Close)
+	a.router, err = NewRouter(cfg, log, a.cache, a.Ready, a.system, job.New(deps), gen.New(deps))
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +86,9 @@ func (a *App) Ready(ctx context.Context) error {
 	databaseCtx, cancelDB := context.WithTimeout(ctx, a.cfg.Database.Timeout)
 	defer cancelDB()
 	if err := database.CheckMigrations(databaseCtx, a.db.SQL); err != nil {
+		return err
+	}
+	if err := a.system.Ready(ctx); err != nil {
 		return err
 	}
 	redisCtx, cancelRedis := context.WithTimeout(ctx, a.cfg.Redis.Timeout)

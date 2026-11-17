@@ -1,4 +1,4 @@
-name: M1 框架验证
+name: 框架与认证验证
 on:
   push:
   pull_request:

@@ -10,16 +10,19 @@ import (
 	"syscall"
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/app"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/config"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/database"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/logger"
+	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys"
+	"github.com/StarsSkyCat/Stars-Admin/pkg/snowflake"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
 // @title Stars-Admin API
 // @version 0.1
-// @description Stars-Admin M1 基础框架接口
+// @description Stars-Admin 框架及 M2 认证与权限接口
 // @BasePath /api
 // @securityDefinitions.apikey BearerAuth
 // @in header
@@ -36,10 +39,11 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) (err error) {
-	if len(args) > 0 && args[0] != "serve" && args[0] != "migrate" {
-		return errors.New("用法：stars-admin [serve | migrate up|down|status]")
+	if len(args) > 0 && args[0] != "serve" && args[0] != "migrate" && args[0] != "seed" {
+		return errors.New("用法：stars-admin [serve | migrate up|down|status | seed]")
 	}
 	migrating := len(args) > 0 && args[0] == "migrate"
+	seeding := len(args) > 0 && args[0] == "seed"
 	if migrating && (len(args) != 2 || (args[1] != "up" && args[1] != "down" && args[1] != "status")) {
 		return errors.New("用法：stars-admin migrate up|down|status")
 	}
@@ -53,6 +57,8 @@ func run(ctx context.Context, args []string) (err error) {
 	var cfg *config.Config
 	if migrating {
 		cfg, err = config.LoadForMigration(dir)
+	} else if seeding {
+		cfg, err = config.LoadForSeed(dir)
 	} else {
 		cfg, err = config.Load(dir)
 	}
@@ -63,6 +69,10 @@ func run(ctx context.Context, args []string) (err error) {
 		if err := cfg.ValidateDatabase(); err != nil {
 			return err
 		}
+	} else if seeding {
+		if err := cfg.ValidateSeed(); err != nil {
+			return err
+		}
 	} else if err := cfg.ValidateServer(); err != nil {
 		return err
 	}
@@ -71,6 +81,25 @@ func run(ctx context.Context, args []string) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, closeLog()) }()
+	if seeding {
+		connection, err := database.Open(ctx, cfg.Database)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = connection.Close() }()
+		if err := database.CheckMigrations(ctx, connection.SQL); err != nil {
+			return err
+		}
+		ids, err := snowflake.New(cfg.ID.Node)
+		if err != nil {
+			return err
+		}
+		if err := sys.Seed(ctx, core.Deps{Config: cfg, DB: connection.ORM, Logger: log, IDs: ids}, os.Getenv("STARS_SEED_ADMIN_PASSWORD")); err != nil {
+			return err
+		}
+		log.Info("种子初始化完成，已有密码、状态与授权保持不变")
+		return nil
+	}
 	if migrating {
 		if args[1] != "status" {
 			return database.Migrate(ctx, cfg.Database, args[1])

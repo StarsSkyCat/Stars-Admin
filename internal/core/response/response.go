@@ -48,6 +48,15 @@ var (
 	ErrMethod          = &BizError{1006, "请求方法不受支持"}
 	ErrInternal        = &BizError{1500, "服务内部错误"}
 	ErrUnavailable     = &BizError{1501, "服务暂不可用"}
+	ErrUnauthenticated = &BizError{2000, "请先登录"}
+	ErrTokenExpired    = &BizError{2001, "令牌已过期"}
+	ErrCredentials     = &BizError{2002, "用户名或密码错误"}
+	ErrAccountLocked   = &BizError{2003, "账号暂时锁定"}
+	ErrPermission      = &BizError{2004, "没有操作权限"}
+	ErrCaptcha         = &BizError{2005, "验证码错误或已过期"}
+	ErrAccountDisabled = &BizError{2006, "账号或角色已停用"}
+	ErrRefresh         = &BizError{2007, "刷新令牌失效"}
+	ErrPasswordChange  = &BizError{2008, "首次登录或密码重置后须修改密码"}
 )
 
 var statuses = map[int]int{
@@ -55,6 +64,9 @@ var statuses = map[int]int{
 	1002: http.StatusConflict, 1003: http.StatusConflict, 1004: http.StatusTooManyRequests,
 	1005: http.StatusForbidden, 1006: http.StatusMethodNotAllowed,
 	1500: http.StatusInternalServerError, 1501: http.StatusServiceUnavailable,
+	2000: http.StatusUnauthorized, 2001: http.StatusUnauthorized, 2002: http.StatusUnauthorized,
+	2003: http.StatusForbidden, 2004: http.StatusForbidden, 2005: http.StatusBadRequest,
+	2006: http.StatusForbidden, 2007: http.StatusUnauthorized, 2008: http.StatusForbidden,
 }
 
 // OK 通过统一出口编码成功响应。

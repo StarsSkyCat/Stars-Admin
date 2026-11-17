@@ -34,8 +34,12 @@ func TestMigrationLifecycleAndConstraints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Version > 0 {
+	for status.Version > 0 {
 		if err := Migrate(ctx, cfg.Database, "down"); err != nil {
+			t.Fatal(err)
+		}
+		status, err = ReadStatus(ctx, connection.SQL)
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,7 +97,7 @@ func TestMigrationLifecycleAndConstraints(t *testing.T) {
 	for _, state := range []struct {
 		version int
 		dirty   bool
-	}{{1, true}, {-1, true}, {2, false}} {
+	}{{1, true}, {-1, true}, {3, false}} {
 		if _, err := connection.SQL.ExecContext(ctx, "UPDATE public.schema_migrations SET version=$1, dirty=$2", state.version, state.dirty); err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +109,7 @@ func TestMigrationLifecycleAndConstraints(t *testing.T) {
 			t.Fatal("脏版本或超前结构未拒绝")
 		}
 	}
-	if _, err := connection.SQL.ExecContext(ctx, "UPDATE public.schema_migrations SET version=1, dirty=false"); err != nil {
+	if _, err := connection.SQL.ExecContext(ctx, "UPDATE public.schema_migrations SET version=2, dirty=false"); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(ctx, cfg.Database, "down"); err != nil {
