@@ -1,16 +1,19 @@
-# 生产模板不携带真实密钥，由 STARS_ 环境变量提供。
+# APP_ENV=prod 时覆盖 config.yaml；未列出的配置沿用基础值。
+# 真实密码和密钥只能通过受保护环境变量注入，不写入本文件或普通参数表。
 app:
-  env: prod
+  env: prod                  # 记录生产环境；文件选择仍以 APP_ENV 为准。
 database:
-  password: ""
-  sslmode: verify-full
-  auto_migrate: false
+  password: ""              # 必须设置 STARS_DATABASE_PASSWORD，不能使用开发默认值。
+  sslmode: verify-full       # 校验证书及主机名；自签 CA 通过 PGSSLROOTCERT 文件提供。
+  auto_migrate: false        # 禁止自动建表，部署前显式执行 migrate up。
 jwt:
-  secret: ""
+  secret: ""                # 必须设置 STARS_JWT_SECRET，至少 32 字节且不能为开发默认值。
 log:
-  level: info
-  format: json
+  level: info                # 避免生产持续输出调试日志。
+  format: json               # 生产启动校验要求结构化 JSON 日志。
 swagger:
-  enabled: false
+  enabled: false             # 不在生产对外暴露交互文档。
 cors:
-  origins: []
+  origins: []                # 默认不允许跨域；按需通过 STARS_CORS_ORIGINS 配明确来源，禁止 *。
+# 生产部署还需配置数据库/Redis地址、密码、雪花节点、文件/日志目录等，见根目录 README。
+# gen.local_enabled 沿用 false，生产校验禁止 true；Redis 必须处于受保护的专用网络。

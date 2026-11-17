@@ -87,3 +87,15 @@ func TestRendererWorksWithoutGoToolchainOnPath(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratorRejectsCredentialColumnVariants(t *testing.T) {
+	for _, name := range []string{"password", "passwd", "pwd", "pwd_hash", "password_digest", "access_token", "api_key", "private_key", "credential", "hash"} {
+		t.Run(name, func(t *testing.T) {
+			row, cols, opts := fixture()
+			opts.Snapshot.Columns[7].Name = name
+			if err := validateSchema(row, cols, opts); !errors.Is(err, response.ErrInvalidParam) {
+				t.Fatal("敏感凭证列变体未拒绝")
+			}
+		})
+	}
+}

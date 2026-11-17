@@ -239,7 +239,8 @@ func validateSchema(row table, cols []column, opts options) error {
 		if !dbName.MatchString(c.Name) || c.Identity || c.Generated || goType(c) == "" {
 			return response.ErrInvalidParam
 		}
-		for _, word := range []string{"password", "secret", "token", "captcha", "credential"} {
+		// 名称拦截是保守防线，业务语义仍须开发者在接入前人工审核。
+		for _, word := range []string{"password", "passwd", "pwd", "secret", "token", "captcha", "credential", "hash", "private_key", "api_key", "apikey"} {
 			if strings.Contains(c.Name, word) {
 				return response.ErrInvalidParam
 			}

@@ -1,22 +1,58 @@
-name: 框架与认证验证
+name: 质量与交付验证
 on:
   push:
   pull_request:
 permissions:
   contents: read
 jobs:
-  verify:
+  lint:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: 检出源码
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - name: 构建锁定的工具链
-        run: ./scripts/dev.sh tools
-      - name: 格式、静态检查、构建与测试
-        run: ./scripts/dev.sh verify
-      - name: 验证非 root 生产镜像
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: ./scripts/dev.sh tools
+      - name: 格式、静态检查与全部包构建
+        run: |
+          ./scripts/dev.sh lint
+          ./scripts/dev.sh build
+          docker compose -p stars-admin-dev -f deployments/compose.yaml run --rm --no-deps dev go build ./...
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: ./scripts/dev.sh tools
+      - name: race 单元、隔离集成与 service 覆盖率门槛
+        run: |
+          ./scripts/dev.sh test-cover
+          ./scripts/dev.sh integration-cover
+          ./scripts/dev.sh coverage
+      - name: 保存覆盖率
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: coverage
+          path: .cache/coverage/
+          include-hidden-files: true
+          if-no-files-found: error
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: ./scripts/dev.sh tools
+      - name: 空库逐版回退与升级
+        run: ./scripts/dev.sh test-migrate
+      - name: 生产镜像、停机与备份恢复演练
         run: ./scripts/smoke.sh
+  swag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - run: ./scripts/dev.sh tools
+      - name: 从注解生成、校验并编译 Swagger 包
+        run: ./scripts/dev.sh check-swag
       - name: 保存接口文档
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -25,3 +61,15 @@ jobs:
             docs/swagger/swagger.json
             docs/swagger/swagger.yaml
           if-no-files-found: error
+  vuln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - run: ./scripts/dev.sh tools
+      - name: 工作区与历史敏感信息规则扫描
+        run: ./scripts/secret-scan.sh
+      - name: 官方实时漏洞库扫描（保留失败退出码）
+        run: ./scripts/dev.sh vuln

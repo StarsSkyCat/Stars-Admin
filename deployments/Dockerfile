@@ -6,6 +6,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN make build && mkdir -p /out/logs /out/uploads /out/tmp && cp bin/stars-admin /out/stars-admin && cp -r configs /out/configs
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/probe ./cmd/probe
 
 # 静态二进制使用非 root 用户运行，保留 TLS 根证书。
 FROM scratch

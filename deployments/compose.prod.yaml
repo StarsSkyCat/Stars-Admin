@@ -1,0 +1,50 @@
+# 连接外部 PostgreSQL/Redis 的单实例部署；先按部署手册注入环境变量。
+services:
+  api:
+    image: ${STARS_IMAGE:?必须提供经过验收的镜像标签或摘要}
+    user: "65532:65532"
+    read_only: true
+    init: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ports:
+      - "127.0.0.1:${STARS_HTTP_PORT:-8080}:8080"
+    environment:
+      APP_ENV: prod
+      TMPDIR: /app/tmp
+      STARS_APP_ADDR: ":8080"
+      STARS_APP_SHUTDOWN_TIMEOUT: 10s
+      STARS_DATABASE_HOST: ${STARS_DATABASE_HOST:?必须提供数据库主机}
+      STARS_DATABASE_PORT: ${STARS_DATABASE_PORT:-5432}
+      STARS_DATABASE_USERNAME: ${STARS_DATABASE_USERNAME:?必须提供数据库用户}
+      STARS_DATABASE_DBNAME: ${STARS_DATABASE_DBNAME:?必须提供数据库名称}
+      STARS_DATABASE_PASSWORD: ${STARS_DATABASE_PASSWORD:?必须提供数据库密码}
+      STARS_DATABASE_SSLMODE: verify-full
+      PGSSLROOTCERT: /run/secrets/postgres-ca.crt
+      STARS_REDIS_ADDR: ${STARS_REDIS_ADDR:?必须提供专用 Redis 地址}
+      STARS_REDIS_PASSWORD: ${STARS_REDIS_PASSWORD:?必须提供 Redis 密码}
+      STARS_REDIS_KEY_PREFIX: "stars:prod:"
+      STARS_JWT_SECRET: ${STARS_JWT_SECRET:?必须提供至少32字节密钥}
+      STARS_ID_NODE: ${STARS_ID_NODE:?必须分配雪花节点0到1023}
+      STARS_CORS_ORIGINS: ${STARS_CORS_ORIGINS:?必须提供明确来源白名单}
+      STARS_LOG_FORMAT: json
+      STARS_LOG_FILE: /app/logs/app.log
+      STARS_FILE_LOCAL_DIR: /app/uploads
+      STARS_SWAGGER_ENABLED: "false"
+      STARS_GEN_LOCAL_ENABLED: "false"
+      # 只在显式 seed 的一次性容器中提供，常驻服务应保持为空。
+      STARS_SEED_ADMIN_PASSWORD: ${STARS_SEED_ADMIN_PASSWORD:-}
+    volumes:
+      - ${STARS_UPLOADS_DIR:?必须提供可写文件目录}:/app/uploads
+      - ${STARS_LOGS_DIR:?必须提供可写日志目录}:/app/logs
+      - ${STARS_PG_CA_FILE:?必须提供PG根证书文件}:/run/secrets/postgres-ca.crt:ro
+    tmpfs:
+      - /app/tmp:uid=65532,gid=65532,mode=0700,size=134217728
+    healthcheck:
+      test: ["CMD", "/app/probe"]
+      interval: 10s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+    stop_grace_period: 20s

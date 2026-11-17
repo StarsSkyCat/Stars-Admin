@@ -1,155 +1,251 @@
 # Stars-Admin
 
-基于 Go、Gin、GORM、PostgreSQL 和 Redis 的模块化单体中后台后端框架。
+Stars-Admin 是基于 Go、Gin、GORM、PostgreSQL 和 Redis 的模块化中后台后端框架，提供认证授权、系统管理、定时任务和代码生成能力，可作为业务后台的开发基础。
 
-当前已实现 M1—M4：认证与 RBAC、用户/角色/菜单/部门/岗位、字典与参数缓存、受保护文件、异步审计、在线用户及 Excel 导入导出，以及单实例任务调度、受限代码生成。用户和部门管理对具有相应权限的普通角色开放，并应用五档数据范围；角色、菜单、岗位、参数、字典管理和审计管理仍仅有效 admin 可用，登录用户可按类型读取启用字典。
+项目仅包含后端 API，当前支持 PostgreSQL；应用、任务调度和授权同步按单实例设计。
 
-M3/M4 已完成本地验收；M4 的完整回归、生成物实测和生产镜像冒烟均通过，证据见 [M4 验证记录](./docs/M4验证记录.md)。M3/M4 尚未推送和进行平台验收。历史 M1/M2 平台结果见 [GitHub Actions](https://github.com/StarsSkyCat/Stars-Admin/actions/workflows/ci.yaml)。
+## 功能
 
-## 快速开始
+| 模块 | 能力 |
+|---|---|
+| 认证与权限 | 验证码、登录锁定、JWT 双令牌、原子刷新、首登改密、在线会话、持久撤销、Casbin RBAC |
+| 系统管理 | 用户、角色、菜单、部门、岗位、五档数据范围、字典、参数配置 |
+| 文件与审计 | 文件上传/下载/删除及所有者校验、操作日志、登录日志、在线用户与强制下线 |
+| 数据处理 | 用户 Excel 导入导出、范围过滤、批量操作事务校验 |
+| 定时任务 | UTC 六位 Cron、白名单函数、启停、手动执行、并发门禁、执行日志 |
+| 代码生成 | PG 业务表元数据、字段配置/同步、CRUD 模板、预览、ZIP 下载及受控本地输出 |
+| 工程质量 | 统一响应、请求日志、健康检查、Swagger、版本化迁移、race 测试、覆盖率与漏洞扫描 |
 
-宿主机只需 Docker、支持 `!reset` 的 Docker Compose 和 Shell。当前验证环境为 Linux x86_64、Docker 29.7.2、Compose 5.5.0；Go、Make、GCC、Air、swag 和 golangci-lint 都在开发容器内。
+## 环境要求
 
-在项目根目录执行：
+两种运行方式使用相同的配置与迁移：
+
+- **Docker 开发**：Docker Engine、Docker Compose（支持 `!reset`）和 Shell；Go、Make、GCC 及开发工具在容器内，无需宿主安装。
+- **本机开发**：Go **1.27.4**、GNU Make、GCC 或兼容 C 编译器（race 测试需要）、PostgreSQL **17**、Redis **7**。以下命令使用 Bash，Windows 可在 WSL 中执行。
+
+容器和工具的精确版本见 [Dockerfile.dev](./deployments/Dockerfile.dev) 与 [images.lock](./deployments/images.lock)，不使用 `latest` 镜像。
 
 ```sh
+git clone https://github.com/StarsSkyCat/Stars-Admin.git
+cd Stars-Admin
+git switch dev
+```
+
+## Docker 启动
+
+首次运行会构建工具镜像并下载依赖。在项目根目录依次执行：
+
+```sh
+# 启动开发 PostgreSQL 和 Redis，仅绑定宿主 127.0.0.1。
 ./scripts/dev.sh dev-env
+
+# 执行数据库迁移。
 ./scripts/dev.sh migrate-up
-# 首次初始化前，通过受保护环境变量注入 STARS_SEED_ADMIN_PASSWORD。
+
+# 在当前 Bash 中安全读取初始密码，避免写入命令历史。
+read -r -s -p '初始 admin 密码：' STARS_SEED_ADMIN_PASSWORD; printf '\n'
+export STARS_SEED_ADMIN_PASSWORD
 ./scripts/dev.sh seed
+unset STARS_SEED_ADMIN_PASSWORD
+
+# 启动 API，使用 Air 热重载；Ctrl+C 停止。
 ./scripts/dev.sh run
 ```
 
-首次运行会构建工具链并下载依赖。开发容器映射宿主机 UID/GID，不挂载 Docker socket。基础服务使用独立的 stars-admin-dev 项目，端口仅绑定 127.0.0.1：PostgreSQL 5432、Redis 6379、HTTP 8080。
+初始账号为 `admin`。首次 seed 密码至少 12 个字符、最多 72 字节；重复 seed 可省略初始密码，不会重置已有密码、状态或授权。服务启动不会自动执行迁移或 seed。
 
-seed 首次从环境变量读取至少 12 字符、最多 72 字节的初始密码，创建用户名 admin（用户和角色 ID 均为 1）；不会打印密码。重复执行允许省略初始密码，且不重置已有密码、状态和授权。seed 仅连接数据库，在迁移后、开放流量前显式运行；HTTP 启动不自动初始化账号。
+开发端口默认 HTTP `8080`、PostgreSQL `5432`、Redis `6379`；可通过 `STARS_HTTP_PORT`、`STARS_PG_PORT`、`STARS_REDIS_PORT` 调整宿主映射。`./scripts/dev.sh dev-down` 停止开发基础服务并保留数据卷。
 
-登录前获取 `/api/sys/auth/captcha`，使用返回的 uuid/image 完成人工验证码，再提交 login 的 captchaUuid/captchaCode。首登只允许 profile/password/logout；修改本人密码会撤销所有会话，须重新登录后在 Swagger Authorize 填入 `Bearer <accessToken>`。
+## 不使用 Docker 启动
 
-- [ping](http://127.0.0.1:8080/api/ping)：统一响应，含 X-Request-Id 响应头。
-- [存活探针](http://127.0.0.1:8080/api/health/live)：仅检查进程。
-- [就绪探针](http://127.0.0.1:8080/api/health/ready)：检查迁移版本、PostgreSQL 和 Redis；失败返回 503，`/api/health` 为别名。
-- [Swagger](http://127.0.0.1:8080/swagger/index.html)：开发环境的 Swagger 2.0 文档。
+先在本机安装并启动 PostgreSQL、Redis，创建开发账号与数据库；例如以 PG 管理员身份执行以下 SQL，密码自行设置：
 
-运行入口使用 Air 热重载；Ctrl+C 停止应用，`./scripts/dev.sh dev-down` 停止基础服务并保留开发数据卷。可用 STARS_HTTP_PORT、STARS_PG_PORT、STARS_REDIS_PORT 更改宿主机映射端口。
-
-## 常用命令
-
-| 命令 | 行为 |
-|---|---|
-| `./scripts/dev.sh tools` | 构建或更新锁定的开发工具镜像 |
-| `./scripts/dev.sh build` | 生成 Swagger 并编译 bin/stars-admin |
-| `./scripts/dev.sh swag` | 从注解生成 docs/swagger/ |
-| `./scripts/dev.sh fmt` | 主动格式化 Go 源码 |
-| `./scripts/dev.sh lint` | 检查格式、goimports、静态分析及导入边界，不改写源码 |
-| `./scripts/dev.sh test` | 执行带 race 的单元测试 |
-| `./scripts/dev.sh test-integration` | 独立 PG/Redis 中执行集成测试，结束后清理测试资源 |
-| `./scripts/dev.sh verify` | lint → build → test → test-integration，与 CI 使用同一入口 |
-| `./scripts/dev.sh migrate-up` | 升级内嵌的版本化迁移 |
-| `./scripts/dev.sh migrate-down` | 仅回退一版，会删除该版结构和数据 |
-| `./scripts/dev.sh migrate-status` | 输出当前版本、期望版本和 dirty 状态 |
-| `./scripts/dev.sh seed` | 初始化缺失基础数据；首次密码从环境变量读取 |
-| `./scripts/smoke.sh` | 独立生产镜像验证迁移、seed、改密、认证、幂等及停机 |
-
-Makefile 的对应目标也可在已准备 Go/Make 和锁定工具的环境使用。集成测试会回退数据库，因此入口固定使用独立的 stars-admin-test 库和项目，拒绝非测试库；单元测试不要求运行数据库。
-
-## 配置与运行约定
-
-配置按基础 YAML → APP_ENV 选定的环境 YAML → STARS_ 环境变量覆盖。APP_ENV 只接受 dev/test/prod，嵌套键转为下划线，例如 STARS_DATABASE_HOST、STARS_DATABASE_PASSWORD、STARS_REDIS_ADDR。STARS_CONFIG_DIR 可选择配置目录，空环境变量按显式空值处理。
-
-生产使用 configs/config.prod.yaml，必须通过环境变量提供非开发默认值的数据库密码及至少 32 字节的 JWT 密钥。生产默认 JSON 日志、关闭 Swagger、CORS 明确白名单，数据库 TLS 默认为 verify-full。密码哈希成本由 STARS_AUTH_BCRYPT_COST 设置，默认 10、范围 4—14，生产范围 10—14。
-
-所有环境都关闭 AutoMigrate；必须先运行迁移再启动 HTTP，当前最新版本为 5（000004_job、000005_gen）。dirty、未升级或超前版本会拒绝启动，不自动 force 或回退。二进制支持 `stars-admin [serve]`、`stars-admin migrate up|down|status`、`stars-admin seed`。迁移只读取数据库/日志配置；seed 额外读取哈希/节点配置，均不连接 Redis 或启动 HTTP。
-
-普通 JSON 响应为 `{code,msg,data}`；ID 使用十进制字符串，时间统一 UTC/RFC3339，错误不透出内部细节。默认每个 IP/路由每分钟 120 次请求，探针和 Swagger 静态资源豁免；Redis 故障返回 503。请求日志仅记录固定元信息，不采集请求头、查询参数或请求体。
-
-雪花节点默认 0、范围 0—1023，不同应用实例必须由部署分配不同编号；本框架不提供节点自动分配或跨实例租约。
-
-M2/M3 的一致性边界为单应用实例、单 Redis，不支持应用多副本策略同步或 Redis Cluster 跨槽 Lua。JWT 仅接受 HS256；Access 默认 30 分钟，会话从首次登录起最长七天，刷新不延长期限。每次认证核对数据库版本和 Redis；密码、状态或角色成员变化提升 auth_version，旧令牌在 Redis 清理失败及应用重启后仍不可用。策略同步失败时鉴权与 readiness 返回 503，后台重试恢复。
-
-认证业务参数存放 sys_config：captchaEnabled=true、multiLogin=true、maxSessions=5、passwordRetryLimit=5、lockMinutes=10，键均以 `sys.account.` 开头。超过会话上限淘汰最早会话；关闭多点登录则新登录替换全部旧会话。缺失参数采用上述默认值，非法已有参数拒绝认证；参数管理接口位于 `/api/sys/configs`，安全参数直接查库，普通按 key 查询使用缓存。
-
-除全局限流外，登录按 IP 20 次/分钟、账号 10 次/分钟；验证码按 IP 30 次/分钟；刷新按 IP 60 次/分钟、sid 30 次/分钟。只信任已配置的代理来源，验证码错误/过期/使用后失效，密码失败达到阈值锁定十分钟。
-
-## M3 系统管理
-
-- 岗位：`/api/sys/posts` CRUD 与 `GET /options`；`PUT /api/sys/users/:id/posts` 接收字符串 `postIds`，解绑后可重绑。
-- 字典：`/api/sys/dict/types`、`/data` CRUD；登录后 `GET /api/sys/dict/data/type/:type`。参数：`/api/sys/configs` CRUD 与 `GET /key/:key`。类型标识和参数 key 不可改名，内置参数不可删除。两类 `POST /cache/refresh` 分别绑定 refresh 权限。
-- 普通缓存 TTL 为 30 分钟，提交后失效重试最多三次，失败告警；并发读回填或失效故障可能短暂陈旧，认证读取不依赖这些缓存。
-- 文件：`POST /api/sys/files/upload`、`GET /:id/download`、`DELETE /:id`，分别要求 add/get/remove 权限。默认最大 10MB，可配置 txt/png/jpg/jpeg/pdf 子集，内容嗅探和扩展名同时检查。同所有者去重，读取和删除校验所有者或 admin，存储路径不返回客户端。
-- `file.local_dir` 默认 uploads，`file.max_size` 单位字节，`file.extensions` 和 `file.mime_types` 是双白名单。生产请为 /app/uploads 挂载持久卷并赋予 UID 65532 写权限；容器 TMPDIR 为 /app/tmp。物理删除失败保留 `sys_file_cleanup` 任务，重启后继续有界批次重试。
-- 审计：`/api/sys/audit/oper-logs`、`/login-logs` 支持分页、`DELETE /clean` 与 `POST /export`；`GET /online` 按会话展示，`DELETE /online/:userId` 撤销该用户全部 Access/Refresh。清空、导出、强退使用独立权限。在线摘要由 SCAN 读取并核对 Redis 状态与数据库版本，允许扫描期间短暂变化。
-- 操作日志只采集路由、可信主体、IP、traceId、响应 code/msg 与耗时，不采集请求、响应原文及认证/文件/Excel 内容。容量 1024，单 worker 每 50 条或一秒落库；队列满不阻塞，失败重试及丢弃可观测，属于尽力审计。
-- 五档范围为全部、自定义部门、本部门、本部门及以下、仅本人；只合并有效角色，部门路径按逗号边界，空集合拒绝。用户映射 dept_id/id，部门映射 id/当前用户部门；列表、详情、树/options、导出和写入目标一致过滤。批量任一目标越界整体拒绝。无归属映射的全局资源保持 admin 门禁。普通角色只能转授自己持有且仅本人范围的非 admin 角色；数据范围配置仍仅 admin。
-
-用户导入为 `POST /api/sys/users/import`，multipart 字段 file，单工作表 XLSX（xl/worksheets/sheet1.xml），最大 5MB、1000 条数据、26 列、单格 4096 字节、总解压 20MB，禁止公式。第一行固定为：
-
-```text
-username,nickname,password,deptId,roleIds,postIds,email,phone,gender
+```sql
+CREATE ROLE stars LOGIN PASSWORD '替换为本机开发密码';
+CREATE DATABASE stars_admin OWNER stars;
 ```
 
-上述逗号代表分列；角色和岗位单元格内部用逗号分隔字符串 ID，所有 ID 列请使用文本格式。任一行无效返回 errors 行号与通用说明，imported=0，整批不写；不覆盖已有用户，初始密码遵守 12 字符/72 字节边界并强制首登改密。处理期限 30 秒，数据库事务仍遵守 database.timeout；HTTP write_timeout 默认 45 秒。导入与重置密码通过主体/路由/目标的随机所有者 Redis 锁防止并发重复提交，锁不提供重放幂等保证。
-
-`POST /api/sys/users/export` 支持与列表相同的过滤和范围，最多 10000 行；日志导出同样最多 10000 行。导出将所有字段写成文本并转义公式前缀，不含密码哈希和令牌。Excelize 锁定为 v2.11.1，新增依赖所需的 x/crypto 等传递版本同时锁定于 go.mod/go.sum。
-
-
-## M4 任务与代码生成
-
-job/gen 管理默认仅有效 admin，不能通过给普通角色分配菜单绕过门禁；首登改密限制同样生效。两模块只依赖 core/pkg，认证、审计和防重复提交由 app 注入。
-
-任务管理位于 `/api/job/tasks`：标准 CRUD、`PUT /:id/status`、`POST /:id/run`，以及 `GET /cron/next?expr=` 预览未来五次 UTC 触发。日志为 `GET /api/job/logs` 和独立权限的 `DELETE /clean`。新建固定暂停；手动执行允许暂停配置，返回 `state=queued` 或 `skipped`，不代表已经执行成功。
-
-Cron 固定六位含秒、UTC，拒绝时区覆盖与无未来触发。仅支持 app 显式注册的 target，内置 `demoTask` 参数为 JSON 字符串：`{"message":"示例","delayMs":0}`；延时范围 0—60000 毫秒，消息最多 200 字符，消息内容不进入任务日志。增加目标需要在 app 注册 Validate/Redact/Run，禁止 shell/eval。`job.timeout` 默认 30 秒，函数必须配合 context 取消；不响应取消的可信 Go 函数无法被强制终止。
-
-定时与手动入口共用按任务 ID 维护的门禁，重载和删除计划不重置在途状态；`concurrent=false` 时跳过记录为失败分类。`misfirePolicy=1` 仅表示每次进程启动至多补跑一次，`2` 等待下次计划；启用与编辑不会补跑。配置提交后同步失败会暂停新触发、readiness 返回 503，并后台重试；管理入口可用于修复存量错误配置。停机关闭触发并取消任务 context，等待任务结束，再排空有界日志队列。当前只支持单调度实例，多副本会重复执行；不提供分布式防重或精确补跑游标。
-
-生成器入口为 `/api/gen/tables`：
-
-| 动作 | 接口 |
-|---|---|
-| 可导入表 | `GET /db` |
-| 导入元数据 | `POST /import`，body 为 `{"tables":["demo_item"]}` |
-| 配置 CRUD | `GET /`、`GET/PUT /:id`、`DELETE /:ids` |
-| 同步结构 | `POST /:id/sync` |
-| 预览 | `GET /:id/preview` |
-| 输出 | `POST /:id/generate`，默认 zip |
-
-`gen.schema` 固定 public，`gen.allowed_prefixes` 默认 `[biz_, demo_]`。只允许普通业务表，排除 sys_/job_/gen_/pg_/sql_、casbin_rule、schema_migrations、视图及分区。读取实际 go.mod，精简镜像使用二进制构建信息确定 import 根路径；生成不依赖运行时 Go/goimports 工具。
-
-支持单 bigint 雪花主键和完整 Base 字段的表；业务字段支持 bigint/int/smallint、varchar/text/char、timestamp、boolean、numeric，保留 NULL、长度、精度、默认值、约束与索引。ID 字段使用字符串 DTO，numeric 使用十进制字符串，不转换 float64。复合键、identity/生成列、未知类型、缺少 Base 或包含密码/令牌等敏感字段的结构拒绝生成，需要手写业务实现。
-
-导入默认范围为 deny，须显式保存 `scope.mode=admin` 或 `mapped`。mapped 要求选择真实部门/归属字段，归属列须是已映射为 ID 的 bigint（id、*_id、created_by、updated_by）。普通角色访问生成物需在 app 注入真实 `system.Access()`、`system.ScopeResolver()` 与 `system.Guards()`；缺少任一授权/范围能力默认拒绝。原表增删列、类型或主键变化后先 sync，再重新确认配置；删除列不生成，保留按列名合并的人工配置。
-
-生成包包含 handler/service/repository/model/dto/routes、有效行为测试、`migration-drafts` up/down 和 ASSEMBLY.md。原表已存在，参考 SQL 不进入正式 migrations，不自动执行或自动装配。生成后需 review 业务规则、关联解绑与权限，再通过项目 lint/test/swag 和隔离 CRUD 验证。
-
-`gen.local_enabled=false`；生产禁止开启，开发时固定输出根目录 `gen.output_root=.generated`。local 拒绝越界、符号链接和已有文件，失败清理本轮新文件；zip 条目也校验为安全相对路径。不会改写 AGENTS.md、go.mod、module.go 或现有源码。
-
-可复现的实测流程与支持边界见 [使用手册](./docs/使用手册.md) 和 [M4 验证记录](./docs/M4验证记录.md)。
-
-## 生产镜像与验证
+安装与容器一致的开发工具，并将 Go 的 bin 目录加入 PATH：
 
 ```sh
-docker build -f deployments/Dockerfile -t stars-admin:m4 .
-./scripts/smoke.sh
+export GOTOOLCHAIN=local
+export PATH="$(go env GOPATH)/bin:$PATH"
+go mod download
+go install github.com/swaggo/swag/cmd/swag@v1.16.6
+go install github.com/air-verse/air@v1.67.4
+go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+go install golang.org/x/tools/cmd/goimports@v0.52.0
+go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 ```
 
-生产镜像使用静态二进制、TLS 根证书、配置及内嵌迁移，默认用户为 65532:65532。smoke 使用公开的测试凭据及隔离网络，测试数据库关闭 TLS；此项测试设置不用于真实生产部署。
+在项目根目录配置连接并启动：
 
-官方基础镜像标签和摘要记录在 deployments/images.lock，依赖固定在 go.mod/go.sum，工具版本固定在开发 Dockerfile。GitHub Actions 在 push/PR 时调用同样的容器入口，成功后将生成的 Swagger JSON/YAML 上传为 swagger artifact。
+```sh
+export APP_ENV=dev
+export STARS_DATABASE_HOST=127.0.0.1
+export STARS_DATABASE_PORT=5432
+export STARS_DATABASE_USERNAME=stars
+export STARS_DATABASE_DBNAME=stars_admin
+read -r -s -p '本机数据库密码：' STARS_DATABASE_PASSWORD; printf '\n'
+export STARS_DATABASE_PASSWORD
+export STARS_REDIS_ADDR=127.0.0.1:6379
+# Redis 启用密码时，额外通过 STARS_REDIS_PASSWORD 提供。
 
-## 工程导读与本地文档
+make migrate-up
+read -r -s -p '初始 admin 密码：' STARS_SEED_ADMIN_PASSWORD; printf '\n'
+export STARS_SEED_ADMIN_PASSWORD
+make seed
+unset STARS_SEED_ADMIN_PASSWORD
+make run
+```
 
-业务使用 `internal/modules/{module}/{feature}` 的两级结构；sys 已实现 M3 功能，job/gen 已实现 M4 能力。框架能力集中在 internal/core，可复用工具位于 pkg，正式结构变更位于 migrations，容器配置位于 deployments。M3/M4 能力和限制见上文，M5 质量汇总与发布尚未开始。
+以上启动命令不调用 Docker。也可通过 `make build` 生成二进制，再执行 `./bin/stars-admin serve`；直接使用 Go 入口时先执行 `make swag`，再运行 `go run ./cmd/server serve`。Swagger 生成包不入库，不能跳过生成步骤直接编译新克隆的源码。
 
-按用户要求，docs/ 和 AGENTS.md 只保留在本地，不纳入 Git。Swagger 生成物同样忽略，所有构建和 CI 必须先运行 make swag，不能依赖已提交的生成文件。
+## 登录与接口
 
-当前工作区的设计和进度文档：
+启动成功后访问：
 
-- [协作规则](./AGENTS.md)
-- [技术选型](./docs/前期开发与技术选型文档.md)、[数据库设计](./docs/数据库设计文档.md)、[编码规范](./docs/编码规范.md)
-- [进度文档](./docs/进度文档.md)、[M1 开发文档](./docs/开发文档/M1-框架骨架.md)
-- [M1 验证记录](./docs/M1验证记录.md)、[文档审核记录](./docs/文档审核记录.md)
-- [M2 开发文档](./docs/开发文档/M2-认证与权限.md)、[M2 验证记录](./docs/M2验证记录.md)
-- [M3 开发文档](./docs/开发文档/M3-系统管理.md)、[M3 验证记录](./docs/M3验证记录.md)
+| 地址 | 用途 |
+|---|---|
+| `http://127.0.0.1:8080/api/ping` | 基础连通性 |
+| `http://127.0.0.1:8080/api/health/live` | 进程存活 |
+| `http://127.0.0.1:8080/api/health/ready` | 数据库/迁移、Redis、授权与调度就绪，失败返回 503 |
+| `http://127.0.0.1:8080/swagger/index.html` | 开发环境 API 文档和调试入口 |
 
-- [M4 开发文档](./docs/开发文档/M4-效率工具.md)、[M4 验证记录](./docs/M4验证记录.md)、[使用手册](./docs/使用手册.md)
+1. 调用 `GET /api/sys/auth/captcha` 获取图片验证码。
+2. 向 `POST /api/sys/auth/login` 提交 `username`、`password`、`captchaUuid`、`captchaCode`。
+3. 首次登录后调用 `PUT /api/sys/auth/password` 修改密码，再重新登录。首登令牌仅允许本人 profile/password/logout；改密会撤销全部会话。
+4. 后续请求携带 `Authorization: Bearer <accessToken>`；Swagger 中填入完整的 `Bearer <accessToken>`。Refresh 令牌只用于刷新接口。
+
+API 使用 `/api` 前缀，JSON 字段为小驼峰，普通响应格式为 `{code,msg,data}`。ID 与 ID 列表使用十进制字符串，时间采用 UTC/RFC3339；文件、Excel、ZIP 成功时返回二进制流。分页默认 `page=1&pageSize=20`，上限 100；排序及查询运算符由服务端白名单控制。
+
+用户/部门管理对持相应权限的普通角色开放，并应用数据范围；全局角色、菜单、岗位、字典、参数、审计、job/gen 管理仅有效 admin 可用。按类型查询启用字典项允许登录用户访问。
+
+## 测试与检查
+
+### Docker 测试
+
+```sh
+./scripts/dev.sh test              # race 单元测试，无需启动 PG/Redis
+./scripts/dev.sh test-integration  # 自动创建并清理隔离 PG/Redis 测试项目
+./scripts/dev.sh verify-m5         # lint/build、覆盖率、迁移、Swagger、漏洞检查
+./scripts/smoke.sh                 # 独立生产镜像冒烟与备份恢复演练
+```
+
+### 不使用 Docker 测试
+
+安装上述 Go 工具后，一条命令执行格式检查、lint、构建和 race 单元测试：
+
+```sh
+make verify-local
+```
+
+该命令不调用 Docker，也不要求数据库或 Redis。单独执行时可用 `make lint`、`make test`、`make build`；`make fmt` 会主动格式化源码。
+
+本机集成测试需额外准备**专用测试数据库和 Redis**。以 PG 管理员身份创建测试账号与数据库，不能使用开发或生产库：
+
+```sql
+CREATE ROLE stars_test LOGIN PASSWORD '替换为本机测试密码';
+CREATE DATABASE stars_admin_test OWNER stars_test;
+```
+
+在单独终端中运行，避免覆盖开发终端的环境变量：
+
+```sh
+export APP_ENV=test
+export STARS_INTEGRATION=1
+export STARS_DATABASE_HOST=127.0.0.1
+export STARS_DATABASE_PORT=5432
+export STARS_DATABASE_USERNAME=stars_test
+export STARS_DATABASE_DBNAME=stars_admin_test
+read -r -s -p '测试数据库密码：' STARS_DATABASE_PASSWORD; printf '\n'
+export STARS_DATABASE_PASSWORD
+export STARS_REDIS_ADDR=127.0.0.1:6379
+# 这里必须指向专用测试 Redis；启用密码时另设 STARS_REDIS_PASSWORD。
+
+make test-integration
+# 收集与合并 service 语句覆盖率，门槛为整体 >=60%。
+make test-cover
+make integration-cover
+make coverage
+# 其他独立检查。
+make test-migrate
+make check-swag
+make vuln
+```
+
+集成测试会执行迁移回退和数据清理，只允许 `APP_ENV=test`、库名 `stars_admin_test` 的隔离环境。生成器验收会在临时模块实际执行 build/lint/race/swag 与 PG/Casbin 行为测试。
+
+CI 定义 lint/test/migrate/swag/vuln 五个 job，并保存覆盖率与 Swagger artifact；工作区及可见 Git 历史的敏感信息规则扫描入口为 `./scripts/secret-scan.sh`。
+
+## 配置
+
+- [config.yaml](./configs/config.yaml)：基础配置及逐项中文说明，默认用于本机开发。
+- [config.prod.yaml](./configs/config.prod.yaml)：生产覆盖项，不包含真实密钥。
+- [config.test.yaml](./configs/config.test.yaml)：测试覆盖项。
+- [casbin_model.conf](./configs/casbin_model.conf)：RBAC 模型；用户和角色使用独立命名空间。
+
+加载顺序为基础 YAML → `APP_ENV` 对应环境 YAML → `STARS_` 环境变量。`APP_ENV` 仅允许 dev/test/prod；例如 `database.host` 对应 `STARS_DATABASE_HOST`，列表变量使用逗号分隔。`STARS_CONFIG_DIR` 可更改配置目录，空环境变量也会覆盖默认值。命令不会自动读取 `.env`。
+
+所有环境都关闭 AutoMigrate。先执行版本化迁移再启动服务；dirty、未升级或超前版本均拒绝启动。CLI 支持 `serve`、`migrate up|down|status`、`seed`；迁移/seed 不依赖 Redis 或已启动的 HTTP 服务。`migrate down` 默认只回退一版，会删除该版结构及数据。
+
+## 生产部署
+
+构建生产镜像：
+
+```sh
+docker build -f deployments/Dockerfile -t stars-admin:local .
+```
+
+[compose.prod.yaml](./deployments/compose.prod.yaml) 提供连接外部 PostgreSQL/Redis 的单实例示例。使用前需提供以下环境变量：
+
+| 变量 | 内容 |
+|---|---|
+| `STARS_IMAGE` | 经过验收的镜像标签或摘要 |
+| `STARS_DATABASE_HOST/PORT/USERNAME/DBNAME/PASSWORD` | PostgreSQL 连接，PORT 可省略（默认5432） |
+| `STARS_PG_CA_FILE` | PG 根证书绝对路径；使用 verify-full 且证书主机名必须匹配 |
+| `STARS_REDIS_ADDR/PASSWORD` | 专用受保护网络中的 Redis 及密码；当前客户端无 TLS 配置 |
+| `STARS_JWT_SECRET` | 至少 32 字节的环境注入密钥 |
+| `STARS_ID_NODE` | 0—1023 的雪花节点编号 |
+| `STARS_CORS_ORIGINS` | 明确的来源白名单，禁止 `*` |
+| `STARS_UPLOADS_DIR`、`STARS_LOGS_DIR` | 上传/日志绝对目录，UID/GID 65532 可写 |
+
+在目标环境准备好目录、证书及受保护变量后：
+
+```sh
+docker compose -p stars-admin-prod -f deployments/compose.prod.yaml config --quiet
+# 先停止旧实例、备份数据库和上传目录，并在隔离环境确认备份可恢复。
+docker compose -p stars-admin-prod -f deployments/compose.prod.yaml run --rm --no-deps api migrate up
+# 首次 seed 时单独提供 STARS_SEED_ADMIN_PASSWORD。
+docker compose -p stars-admin-prod -f deployments/compose.prod.yaml run --rm --no-deps api seed
+unset STARS_SEED_ADMIN_PASSWORD
+docker compose -p stars-admin-prod -f deployments/compose.prod.yaml up -d --wait api
+```
+
+生产镜像为非 root scratch，提供内置 readiness probe，关闭 Swagger 和本地代码生成；上传/日志持久化，临时文件写入 tmpfs。反向代理负责 HTTPS，默认 HTTP 端口只绑定 127.0.0.1。升级须区分应用回滚与结构回退，`down` 无法恢复已删除的数据。
+
+## 项目结构
+
+```text
+cmd/                 应用、探针、冒烟和覆盖率命令
+configs/             YAML 配置与 Casbin 模型
+internal/app/        路由、依赖装配与生命周期
+internal/core/       配置、数据库、认证基础能力、中间件、调度等
+internal/modules/    sys / job / gen 业务模块
+pkg/                 通用工具
+migrations/          PostgreSQL 版本化 SQL 迁移
+scripts/             开发、测试与验证入口
+deployments/         Dockerfile 与 Compose
+```
+
+业务采用 `internal/modules/{module}/{feature}` 结构，按 handler/service/repository 分层。数据库、Redis、策略同步、调度与日志 worker 按生命周期统一装配。
+
+## 使用边界
+
+- 单应用/调度实例、单 Redis；不支持多副本策略同步、跨实例任务防重或 Redis Cluster 跨槽 Lua。
+- 任务仅调用显式注册的函数，必须配合 context 取消；日志为有界队列的尽力审计。
+- 普通字典/参数缓存有 TTL 陈旧窗口，安全认证参数不依赖普通缓存放行。
+- 生成器只支持已登记 Base、类型及单 bigint 雪花主键的业务表；凭证字段名称拦截不能替代人工审查。默认 ZIP，local 默认关闭且生产禁用，产物需审核后手工接入。
+- 文件按所有者校验，同 hash 只在同一所有者内去重；admin 的管理权限仍需经过认证与首登改密。
+
+版本功能及已知限制见 [CHANGELOG](./CHANGELOG.md)，许可见 [LICENSE](./LICENSE)。

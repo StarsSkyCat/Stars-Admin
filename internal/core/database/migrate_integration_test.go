@@ -52,6 +52,23 @@ func TestMigrationLifecycleAndConstraints(t *testing.T) {
 	if err := CheckMigrations(ctx, connection.SQL); err != nil {
 		t.Fatal(err)
 	}
+	// 独立 CI job 从空库开始，仍必须实际逐版回退，不能依赖其他包先迁移。
+	latest, err := LatestVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for version := latest; version > 0; version-- {
+		if err := Migrate(ctx, cfg.Database, "down"); err != nil {
+			t.Fatal(err)
+		}
+		status, err := ReadStatus(ctx, connection.SQL)
+		if err != nil || status.Version != int64(version-1) || status.Dirty {
+			t.Fatalf("逐版回退状态错误：%+v，%v", status, err)
+		}
+	}
+	if err := Migrate(ctx, cfg.Database, "up"); err != nil {
+		t.Fatal(err)
+	}
 	var count int
 	if err := connection.SQL.QueryRowContext(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'sys_%'").Scan(&count); err != nil || count != 16 {
 		t.Fatalf("系统表数量错误：%d，%v", count, err)

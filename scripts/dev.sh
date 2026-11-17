@@ -22,7 +22,7 @@ case "$target" in
     dev-env) compose up -d --wait postgres redis ;;
     dev-down) compose down ;;
     tools) compose build dev ;;
-    test-integration)
+    test-integration|integration-cover|test-migrate)
         ensure_tools
         export STARS_DATABASE_PASSWORD=stars-test-only-password
         export STARS_DATABASE_DBNAME=stars_admin_test
@@ -32,10 +32,10 @@ case "$target" in
         }
         trap 'test_compose down -v --remove-orphans' EXIT HUP INT TERM
         STARS_DATABASE_DBNAME=stars_admin_test test_compose up -d --wait postgres redis
-        test_compose run --rm --no-deps dev make test-integration
+        test_compose run --rm --no-deps dev make "$target" "$@"
         ;;
     run) ensure_tools; compose run --rm --no-deps --service-ports dev make run "$@" ;;
-    build|swag|lint|test|fmt|tidy|migrate-up|migrate-down|migrate-status|seed)
+    build|package|swag|check-swag|lint|test|test-cover|coverage|vuln|fmt|tidy|migrate-up|migrate-down|migrate-status|seed)
         ensure_tools
         compose run --rm --no-deps dev make "$target" "$@"
         ;;
@@ -44,6 +44,16 @@ case "$target" in
         "$0" build
         "$0" test
         "$0" test-integration
+        ;;
+    verify-m5)
+        "$0" lint
+        "$0" build
+        "$0" test-cover
+        "$0" integration-cover
+        "$0" coverage
+        "$0" test-migrate
+        "$0" check-swag
+        "$0" vuln
         ;;
     *) printf '%s\n' "未知命令：$target" >&2; exit 2 ;;
 esac

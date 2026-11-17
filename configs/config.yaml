@@ -1,66 +1,91 @@
+# 基础配置：config.{APP_ENV}.yaml 覆盖本文件，STARS_ 环境变量具有最高优先级。
+# 示例：database.host -> STARS_DATABASE_HOST；超时带单位，列表变量以逗号分隔。
+# 本文件的数据库密码和 JWT 密钥仅为公开开发默认值，生产必须从环境变量注入。
+
+# HTTP 服务与连接期限。
 app:
-  name: stars-admin
-  env: dev
-  addr: ":8080"
-  read_header_timeout: 5s
-  read_timeout: 15s
-  write_timeout: 45s
-  idle_timeout: 60s
-  shutdown_timeout: 10s
-  trusted_proxies: []
+  name: stars-admin           # 服务名称配置，启动时校验非空。
+  env: dev                   # 环境记录值；实际环境文件只由 APP_ENV=dev/test/prod 选择。
+  addr: ":8080"              # HTTP 监听地址，生产 Compose 固定使用 8080。
+  read_header_timeout: 5s    # 读取请求头的最长时间。
+  read_timeout: 15s          # 读取完整请求的最长时间。
+  write_timeout: 45s         # 写响应的最长时间，需覆盖导入/导出等请求。
+  idle_timeout: 60s          # Keep-Alive 空闲连接期限。
+  shutdown_timeout: 10s      # HTTP 优雅停机期限；容器停止宽限需更长。
+  trusted_proxies: []         # 可信反向代理 IP/CIDR；默认不信任任何代理。
+
+# PostgreSQL：当前唯一支持的数据库，应用和连接均使用 UTC。
 database:
-  driver: postgres
-  host: 127.0.0.1
-  port: 5432
-  username: stars
-  password: stars123
-  dbname: stars_admin
-  sslmode: disable
-  max_open_conns: 50
-  max_idle_conns: 10
-  conn_max_lifetime: 30m
-  timeout: 5s
-  auto_migrate: false
+  driver: postgres           # 固定 postgres，不提供多数据库适配。
+  host: 127.0.0.1            # 本机地址；容器开发入口会覆盖为 postgres 服务名。
+  port: 5432                 # PostgreSQL 监听端口。
+  username: stars            # 连接账号，应只具备目标库所需权限。
+  password: stars123         # 公开开发默认密码；生产拒绝使用该值。
+  dbname: stars_admin        # 开发库；隔离集成测试必须使用 stars_admin_test。
+  sslmode: disable           # 仅开发关闭 TLS；生产模板使用 verify-full。
+  max_open_conns: 50         # 最大连接数，按数据库容量分配。
+  max_idle_conns: 10         # 最大空闲连接数，不得超过 max_open_conns。
+  conn_max_lifetime: 30m     # 连接的最长复用时间。
+  timeout: 5s                # 数据库连接和普通业务请求等操作的期限。
+  auto_migrate: false        # 所有环境必须关闭；结构变更仅通过版本化迁移执行。
+
+# Redis 承载会话、锁、限流及普通缓存，认证链路故障时拒绝放行。
 redis:
-  addr: 127.0.0.1:6379
-  password: ""
-  db: 0
-  pool_size: 20
-  key_prefix: "stars:"
-  timeout: 2s
+  addr: 127.0.0.1:6379       # 单 Redis 地址，当前客户端无 TLS 配置，生产使用受保护网络。
+  password: ""              # 无密码仅适合隔离开发环境；生产通过环境变量提供。
+  db: 0                     # 逻辑库编号，测试应使用专用 Redis。
+  pool_size: 20              # 客户端连接池大小。
+  key_prefix: "stars:"       # 应用 key 前缀，必须以冒号结尾，避免环境间冲突。
+  timeout: 2s                # Redis 请求期限。
+
+# 雪花 ID：部署时分配节点；不提供自动租约或多实例节点协调。
 id:
-  node: 0
+  node: 0                    # 节点编号 0—1023，不能与同时运行的其他节点冲突。
+
+# JWT 只接受 HS256，Access 与 Refresh 的用途分别校验。
 jwt:
-  secret: dev-secret-change-me
-  access_ttl: 30m
-  refresh_ttl: 168h
-  issuer: stars-admin
+  secret: dev-secret-change-me # 公开开发值；生产密钥由环境变量提供，至少 32 字节。
+  access_ttl: 30m            # Access 有效期。
+  refresh_ttl: 168h          # 首次登录起的会话绝对期限，刷新不延长该期限。
+  issuer: stars-admin        # 签发方，验签时必须一致。
+
 auth:
-  bcrypt_cost: 10
+  bcrypt_cost: 10            # bcrypt 成本：4—14，生产必须 10—14；业务认证开关位于 sys_config。
+
+# 日志只记录白名单字段，不记录密码、令牌等敏感原文。
 log:
-  level: debug
-  format: console
-  file: logs/app.log
-  max_size: 100
-  max_backups: 10
-  max_age: 30
+  level: debug               # 日志级别，生产覆盖为 info。
+  format: console            # console 或 json；生产必须 json。
+  file: logs/app.log         # 滚动日志路径；空字符串表示不写文件，仍输出到终端。
+  max_size: 100              # 单个日志文件大小上限，单位 MB。
+  max_backups: 10            # 保留的轮转文件数。
+  max_age: 30                # 轮转文件保留天数。
+
 swagger:
-  enabled: true
+  enabled: true              # 挂载开发 API 文档，生产模板关闭。
 cors:
-  origins: ["*"]
+  origins: ["*"]             # 开发允许所有来源；生产禁止 *，应明确配置来源白名单。
+
+# 按客户端 IP/路由限流；验证码、登录、刷新还有独立限流。
 rate_limit:
-  enabled: true
-  requests: 120
-  window: 1m
+  enabled: true              # 全局业务限流开关，探针/Swagger 静态资源豁免。
+  requests: 120              # 每个固定窗口的请求上限。
+  window: 1m                # 固定窗口长度。
+
+# 上传文件同时校验扩展名和内容类型，下载/删除校验所有者。
 file:
-  local_dir: uploads
-  max_size: 10485760
-  extensions: [".txt", ".png", ".jpg", ".jpeg", ".pdf"]
-  mime_types: ["text/plain", "image/png", "image/jpeg", "application/pdf"]
+  local_dir: uploads         # 固定存储根目录，运行账号需有写权限。
+  max_size: 10485760          # 单文件上限（字节），默认 10MB；配置最大允许 100MB。
+  extensions: [".txt", ".png", ".jpg", ".jpeg", ".pdf"] # 允许的扩展名。
+  mime_types: ["text/plain", "image/png", "image/jpeg", "application/pdf"] # 内容类型白名单。
+
+# 任务函数必须在 app 显式注册，不能执行任意 Shell 或动态脚本。
 job:
-  timeout: 30s
+  timeout: 30s               # 单次任务 context 超时，最大 1h；目标函数必须响应取消。
+
+# 生成器只读取允许范围中的普通业务表，不修改源表或自动装配代码。
 gen:
-  schema: public
-  allowed_prefixes: ["biz_", "demo_"]
-  local_enabled: false
-  output_root: .generated
+  schema: public             # 当前仅允许 public schema。
+  allowed_prefixes: ["biz_", "demo_"] # 业务表前缀；系统表仍会被排除。
+  local_enabled: false       # 默认仅 ZIP；本地输出须显式开启，生产禁止开启。
+  output_root: .generated    # 固定本地输出根目录，拒绝越界、符号链接和覆盖已有文件。
