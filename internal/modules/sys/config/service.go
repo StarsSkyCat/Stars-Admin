@@ -1,4 +1,4 @@
-// Package config 提供认证所需的最小只读业务参数，不开放管理路由。
+// Package config 提供参数管理、普通缓存和认证安全参数直接读取。
 package config
 
 import (
@@ -6,17 +6,9 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/StarsSkyCat/Stars-Admin/internal/core/model"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/cache"
 	"gorm.io/gorm"
 )
-
-type parameter struct {
-	model.Base
-	Key   string
-	Value string
-}
-
-func (parameter) TableName() string { return "sys_config" }
 
 // Settings 的类型与边界在读取时检查，非法参数不能降低认证约束。
 type Settings struct {
@@ -27,18 +19,25 @@ type Settings struct {
 	LockMinutes        int
 }
 
-// Service 只持有数据库只读能力，不提供通用配置更新。
-type Service struct{ db *gorm.DB }
+// Service 管理业务参数，认证读取不使用普通缓存。
+type Service struct {
+	db    *gorm.DB
+	repo  repository
+	cache *cache.Store
+	ids   idSource
+}
 
-// New 创建只读配置业务。
-func New(db *gorm.DB) *Service { return &Service{db} }
+// New 创建参数业务，缓存与 ID 由装配层配置。
+func New(db *gorm.DB) *Service { return &Service{db: db, repo: repository{db}} }
 
 // Read 缺失键采用安全默认值，已有非法值则拒绝认证。
 func (s *Service) Read(ctx context.Context) (Settings, error) {
 	out := Settings{true, true, 5, 5, 10}
 	var rows []parameter
 	keys := []string{"sys.account.captchaEnabled", "sys.account.multiLogin", "sys.account.maxSessions", "sys.account.passwordRetryLimit", "sys.account.lockMinutes"}
-	if err := s.db.WithContext(ctx).Where("key IN ?", keys).Find(&rows).Error; err != nil {
+	var err error
+	rows, err = s.repo.keys(ctx, keys)
+	if err != nil {
 		return Settings{}, err
 	}
 	for _, row := range rows {

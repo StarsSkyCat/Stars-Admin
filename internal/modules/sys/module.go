@@ -3,10 +3,13 @@ package sys
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"time"
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/cache"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/middleware"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/model"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/permission"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
@@ -16,7 +19,9 @@ import (
 	sysconfig "github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/config"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/dept"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/dict"
+	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/file"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/menu"
+	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/post"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/role"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/seed"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/user"
@@ -33,6 +38,14 @@ type Module struct {
 	depts          *dept.Handler
 	security       *security.Manager
 	timeout        time.Duration
+	posts          *post.Handler
+	configs        *sysconfig.Handler
+	dicts          *dict.Handler
+	files          *file.Handler
+	audits         *audit.Handler
+	auditService   *audit.Service
+	fileService    *file.Service
+	duplicate      gin.HandlerFunc
 }
 
 type features struct {
@@ -50,7 +63,11 @@ func assemble(deps core.Deps, gate *security.Manager) features {
 	depts.SetUsers(users)
 	menus.SetRoles(roles)
 	roles.SetUsers(users)
-	return features{users, roles, menus, depts}
+	f := features{users, roles, menus, depts}
+	resolver := scopeResolver{f}
+	users.SetScopeResolver(resolver)
+	depts.SetScopeResolver(resolver)
+	return f
 }
 
 func (f features) project(ctx context.Context, tx *gorm.DB) ([]permission.Rule, error) {
@@ -109,14 +126,29 @@ func New(ctx context.Context, deps core.Deps) (*Module, error) {
 	f := assemble(deps, gate)
 	loginAudit := audit.New(deps.DB, deps.IDs)
 	settings := sysconfig.New(deps.DB)
-	authentication, err := auth.New(deps.Config, deps.Redis, f.users, settings, loginAudit, gate, sessions, deps.Logger)
+	caches := cache.New(deps.Redis, deps.Config.Redis.KeyPrefix+"cache:", deps.Logger)
+	settings.Configure(caches, deps.IDs)
+	dictionaries := dict.New(deps.DB, deps.IDs, caches)
+	posts := post.New(deps.DB, deps.IDs, gate, f.users)
+	f.users.SetPosts(posts)
+	storage, err := file.NewLocal(deps.Config.File.LocalDir)
 	if err != nil {
 		return nil, err
 	}
-	if err := gate.Start(ctx, f.project); err != nil {
+	files := file.New(deps.DB, storage, deps.IDs, deps.Config.File, deps.Logger)
+	loginAudit.Configure(sessions, f.users)
+	authentication, err := auth.New(deps.Config, deps.Redis, f.users, settings, loginAudit, gate, sessions, deps.Logger)
+	if err != nil {
+		_ = files.Close()
 		return nil, err
 	}
-	return &Module{auth.NewHandler(authentication), user.NewHandler(f.users), role.NewHandler(f.roles), menu.NewHandler(f.menus), dept.NewHandler(f.depts), gate, deps.Config.Database.Timeout}, nil
+	if err := gate.Start(ctx, f.project); err != nil {
+		_ = files.Close()
+		_ = gate.Close()
+		return nil, err
+	}
+	loginAudit.Start(deps.Logger)
+	return &Module{authentication: auth.NewHandler(authentication), users: user.NewHandler(f.users), roles: role.NewHandler(f.roles), menus: menu.NewHandler(f.menus), depts: dept.NewHandler(f.depts), security: gate, timeout: deps.Config.Database.Timeout, posts: post.NewHandler(posts), configs: sysconfig.NewHandler(settings), dicts: dict.NewHandler(dictionaries), files: file.NewHandler(files, deps.Config.File.MaxSize), audits: audit.NewHandler(loginAudit), auditService: loginAudit, fileService: files, duplicate: middleware.DuplicateSubmit(deps.Redis, deps.Config.Redis.KeyPrefix)}, nil
 }
 
 // Name 返回系统模块路由前缀。
@@ -124,17 +156,22 @@ func (*Module) Name() string { return "sys" }
 
 // RegisterRoutes 按显式公开入口和逐动作权限进行装配。
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
-	rg.Use(requestDeadline(m.timeout))
+	rg.Use(requestDeadline(m.timeout), middleware.OperLog(m.auditService))
 	m.authentication.RegisterRoutes(rg.Group("/auth"))
-	m.users.RegisterRoutes(rg.Group("/users"), m.authentication.Required(), m.authentication.Permit)
+	m.users.RegisterRoutes(rg.Group("/users"), m.authentication.Required(), m.authentication.Permit, m.duplicate)
 	m.roles.RegisterRoutes(rg.Group("/roles"), m.authentication.Required(), m.authentication.Permit)
 	m.menus.RegisterRoutes(rg.Group("/menus"), m.authentication.Required(), m.authentication.Permit)
 	m.depts.RegisterRoutes(rg.Group("/depts"), m.authentication.Required(), m.authentication.Permit)
+	m.posts.RegisterRoutes(rg.Group("/posts"), m.authentication.Required(), m.authentication.Permit)
+	m.configs.RegisterRoutes(rg.Group("/configs"), m.authentication.Required(), m.authentication.Permit)
+	m.dicts.RegisterRoutes(rg.Group("/dict"), m.authentication.Required(), m.authentication.Permit)
+	m.files.RegisterRoutes(rg.Group("/files"), m.authentication.Required(), m.authentication.Permit)
+	m.audits.RegisterRoutes(rg.Group("/audit"), m.authentication.Required(), m.authentication.Permit)
 }
 
 func requestDeadline(timeout time.Duration) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+		ctx, cancel := context.WithTimeout(c.Request.Context(), requestTimeout(c.FullPath(), timeout))
 		defer cancel()
 		c.Request = c.Request.WithContext(ctx)
 		c.Next()
@@ -145,7 +182,9 @@ func requestDeadline(timeout time.Duration) gin.HandlerFunc {
 func (m *Module) Ready(ctx context.Context) error { return m.security.Ready(ctx) }
 
 // Close 必须在 HTTP 在途请求排空后、数据库关闭前执行。
-func (m *Module) Close() error { return m.security.Close() }
+func (m *Module) Close() error {
+	return errors.Join(m.auditService.Close(), m.fileService.Close(), m.security.Close())
+}
 
 // Seed 仅依赖数据库和哈希配置，不连接 Redis、不启动安全重试或 HTTP。
 func Seed(ctx context.Context, deps core.Deps, password string) error {
@@ -161,4 +200,11 @@ func Seed(ctx context.Context, deps core.Deps, password string) error {
 		return dict.Seed(ctx, tx, deps.IDs)
 	}
 	return seed.Run(ctx, deps.DB, f.depts, f.menus, f.roles, f.users, password, extras, f.project, policies)
+}
+
+func requestTimeout(route string, normal time.Duration) time.Duration {
+	if route == "/api/sys/users/import" {
+		return 30 * time.Second
+	}
+	return normal
 }

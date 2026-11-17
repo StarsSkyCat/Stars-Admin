@@ -5,6 +5,7 @@ import (
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/httpx"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/response"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
 	token "github.com/StarsSkyCat/Stars-Admin/pkg/jwt"
 	"github.com/gin-gonic/gin"
 )
@@ -37,12 +38,14 @@ func (h *Handler) Required() gin.HandlerFunc {
 			}
 		}
 		c.Set("principal", principal)
+		c.Request = c.Request.WithContext(security.WithPrincipal(c.Request.Context(), principal))
 		c.Set("claims", claims)
+		h.service.Touch(c.Request.Context(), principal, claims, c.ClientIP(), c.GetHeader("User-Agent"))
 		c.Next()
 	}
 }
 
-// Permit 同时执行 M2 admin 门禁和显式的路由权限检查。
+// Permit 执行显式路由权限和无归属映射资源的 admin 门禁。
 func (h *Handler) Permit(permission string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if err := h.service.Permit(c.Request.Context(), httpx.Actor(c), permission); err != nil {
@@ -84,7 +87,7 @@ func (h *Handler) Login(c *gin.Context) {
 		response.Fail(c, err)
 		return
 	}
-	out, err := h.service.Login(c.Request.Context(), in, c.ClientIP())
+	out, err := h.service.Login(c.Request.Context(), in, c.ClientIP(), c.GetHeader("User-Agent"))
 	if err != nil {
 		response.Fail(c, err)
 		return

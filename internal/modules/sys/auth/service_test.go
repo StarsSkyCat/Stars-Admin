@@ -43,8 +43,11 @@ func TestProfileAndManagementGate(t *testing.T) {
 	if err != nil || profile.ID != 2 || len(profile.Permissions) != 1 {
 		t.Fatal("本人权限资料不正确")
 	}
-	if err := s.Permit(t.Context(), p, "sys:user:list"); !errors.Is(err, response.ErrPermission) {
-		t.Fatal("M3 前普通用户不能进入管理接口")
+	if err := s.Permit(t.Context(), p, "sys:user:list"); err != nil {
+		t.Fatal("已映射资源应交由权限与范围校验")
+	}
+	if err := s.Permit(t.Context(), p, "sys:role:list"); !errors.Is(err, response.ErrPermission) {
+		t.Fatal("全局角色资源仍须保留管理门禁")
 	}
 	users.account.MustChangePassword = true
 	if err := s.Permit(t.Context(), p, "sys:user:list"); !errors.Is(err, response.ErrPasswordChange) {

@@ -4,7 +4,7 @@ app:
   addr: ":8080"
   read_header_timeout: 5s
   read_timeout: 15s
-  write_timeout: 15s
+  write_timeout: 45s
   idle_timeout: 60s
   shutdown_timeout: 10s
   trusted_proxies: []
@@ -52,3 +52,8 @@ rate_limit:
   enabled: true
   requests: 120
   window: 1m
+file:
+  local_dir: uploads
+  max_size: 10485760
+  extensions: [".txt", ".png", ".jpg", ".jpeg", ".pdf"]
+  mime_types: ["text/plain", "image/png", "image/jpeg", "application/pdf"]

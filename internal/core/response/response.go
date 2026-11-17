@@ -89,6 +89,14 @@ func Fail(c *gin.Context, err error) {
 }
 
 func write(c *gin.Context, status int, body any) {
+	switch b := body.(type) {
+	case Body[any]:
+		c.Set("responseCode", b.Code)
+		c.Set("responseMessage", b.Msg)
+	default:
+		c.Set("responseCode", 0)
+		c.Set("responseMessage", "ok")
+	}
 	data, err := json.Marshal(body)
 	if err != nil {
 		status = http.StatusInternalServerError

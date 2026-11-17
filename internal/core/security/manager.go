@@ -213,7 +213,7 @@ func (m *Manager) Ready(context.Context) error {
 	return nil
 }
 
-// Allow 在完成身份校验后执行权限检查；M2 管理入口另有 admin 门禁。
+// Allow 在完成身份校验后执行权限检查，资源门禁和范围由业务层保证。
 func (m *Manager) Allow(p Principal, perm string) error {
 	if !m.ready.Load() {
 		return response.ErrUnavailable

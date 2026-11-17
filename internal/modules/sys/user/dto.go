@@ -36,6 +36,7 @@ type View struct {
 	LoginAt      *time.Time `json:"loginAt"`
 	PwdUpdatedAt *time.Time `json:"pwdUpdatedAt"`
 	RoleIDs      []model.ID `json:"roleIds"`
+	PostIDs      []model.ID `json:"postIds"`
 }
 
 // Query 提供明确的过滤字段。
@@ -63,5 +64,10 @@ type RolesInput struct {
 }
 
 func view(u user) View {
-	return View{ID: u.ID, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt, Input: Input{Username: u.Username, Nickname: u.Nickname, Email: u.Email, Phone: u.Phone, Gender: u.Gender, Avatar: u.Avatar, DeptID: u.DeptID, Remark: u.Remark}, Status: u.Status, LoginIP: u.LoginIP, LoginAt: u.LoginAt, PwdUpdatedAt: u.PwdUpdatedAt, RoleIDs: []model.ID{}}
+	return View{ID: u.ID, CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt, Input: Input{Username: u.Username, Nickname: u.Nickname, Email: u.Email, Phone: u.Phone, Gender: u.Gender, Avatar: u.Avatar, DeptID: u.DeptID, Remark: u.Remark}, Status: u.Status, LoginIP: u.LoginIP, LoginAt: u.LoginAt, PwdUpdatedAt: u.PwdUpdatedAt, RoleIDs: []model.ID{}, PostIDs: []model.ID{}}
+}
+
+// PostsInput 是用户岗位绑定参数。
+type PostsInput struct {
+	PostIDs []model.ID `json:"postIds" binding:"required"`
 }

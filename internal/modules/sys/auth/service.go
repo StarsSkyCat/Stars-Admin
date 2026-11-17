@@ -124,9 +124,13 @@ func (s *Service) Captcha(ctx context.Context, ip string) (Captcha, error) {
 }
 
 // Login 对未知账号与错误密码返回同一个错误，成功后才返回原子写入的令牌。
-func (s *Service) Login(ctx context.Context, in LoginInput, ip string) (out token.Tokens, err error) {
+func (s *Service) Login(ctx context.Context, in LoginInput, ip string, userAgent ...string) (out token.Tokens, err error) {
 	in.Username = strings.ToLower(strings.TrimSpace(in.Username))
 	defer func() { s.record(ctx, in.Username, ip, err) }()
+	agent := ""
+	if len(userAgent) > 0 {
+		agent = userAgent[0]
+	}
 	if err = s.limit(ctx, "login:ip:"+session.Digest(ip), 20); err != nil {
 		return out, err
 	}
@@ -192,6 +196,7 @@ func (s *Service) Login(ctx context.Context, in LoginInput, ip string) (out toke
 		if e = s.users.RecordLogin(ctx, account.ID, ip); e != nil {
 			s.log.Error("最后登录元信息更新失败")
 		}
+		s.Touch(ctx, account.Principal, &candidate.Access, ip, agent)
 		out = candidate
 		return nil
 	})
@@ -270,6 +275,7 @@ func (s *Service) Refresh(ctx context.Context, raw, ip string) (out token.Tokens
 		if !ok {
 			return response.ErrRefresh
 		}
+		s.Touch(ctx, account.Principal, &candidate.Access, ip, "")
 		out = candidate
 		return nil
 	})
@@ -328,9 +334,32 @@ func (s *Service) Permit(ctx context.Context, p security.Principal, permission s
 		if account.MustChangePassword {
 			return response.ErrPasswordChange
 		}
-		if !account.Admin() {
+		if !account.Admin() && !scopedPermission(permission) {
 			return response.ErrPermission
 		}
 		return s.gate.Allow(account.Principal, permission)
 	})
+}
+
+func scopedPermission(perm string) bool {
+	for _, prefix := range []string{"sys:user:", "sys:dept:", "sys:file:"} {
+		if strings.HasPrefix(perm, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// Touch 更新有效会话的白名单在线摘要，不延长令牌有效期。
+func (s *Service) Touch(ctx context.Context, p security.Principal, claims *token.Claims, ip, agent string) {
+	browser := "Other"
+	for _, name := range []string{"Firefox", "Edg", "Chrome", "Safari"} {
+		if strings.Contains(agent, name) {
+			browser = name
+			break
+		}
+	}
+	if err := s.sessions.Touch(ctx, int64(p.ID), claims, p.Username, ip, browser); err != nil {
+		s.log.Warn("在线摘要更新失败")
+	}
 }

@@ -36,21 +36,28 @@ type Departments interface {
 
 // Service 提供用户管理、认证快照与同事务撤销能力。
 type Service struct {
-	repo  repository
-	ids   idSource
-	gate  changeGate
-	roles Roles
-	depts Departments
-	cost  int
+	repo   repository
+	ids    idSource
+	gate   changeGate
+	roles  Roles
+	depts  Departments
+	cost   int
+	scopes security.Resolver
+	posts  Posts
 }
 
 // New 创建用户业务，哈希成本由应用配置决定。
 func New(db *gorm.DB, ids idSource, gate changeGate, roles Roles, depts Departments, cost int) *Service {
-	return &Service{repository{db}, ids, gate, roles, depts, cost}
+	return &Service{repo: repository{db}, ids: ids, gate: gate, roles: roles, depts: depts, cost: cost}
 }
 
 // List 返回不含哈希的分页资料。
-func (s *Service) List(ctx context.Context, q Query) (response.Page[View], error) {
+func (s *Service) list(ctx context.Context, q Query) (response.Page[View], error) {
+	var scopeErr error
+	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
+	if scopeErr != nil {
+		return response.Page[View]{}, scopeErr
+	}
 	if err := q.Normalize(); err != nil {
 		return response.Page[View]{}, err
 	}
@@ -63,7 +70,12 @@ func (s *Service) List(ctx context.Context, q Query) (response.Page[View], error
 }
 
 // Get 查询详情及角色 ID，不输出认证版本。
-func (s *Service) Get(ctx context.Context, id model.ID) (View, error) {
+func (s *Service) get(ctx context.Context, id model.ID) (View, error) {
+	var scopeErr error
+	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
+	if scopeErr != nil {
+		return View{}, scopeErr
+	}
 	row, err := s.repo.get(ctx, nil, id)
 	if err != nil {
 		return View{}, httpx.DBError(err)
@@ -71,6 +83,10 @@ func (s *Service) Get(ctx context.Context, id model.ID) (View, error) {
 	out := view(row)
 	ids, err := s.repo.roles(ctx, nil, id)
 	out.RoleIDs = ids
+	if err != nil {
+		return out, err
+	}
+	out.PostIDs, err = s.repo.posts(ctx, nil, id)
 	return out, err
 }
 
@@ -90,13 +106,31 @@ func (s *Service) Save(ctx context.Context, p security.Principal, id model.ID, i
 	return s.save(ctx, p, id, in, "")
 }
 func (s *Service) save(ctx context.Context, p security.Principal, id model.ID, in Input, encoded string) (View, error) {
+	if id == 1 && !p.Admin() {
+		return View{}, response.ErrPermission
+	}
 	var out user
 	err := s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		perm := "sys:user:edit"
+		if id == 0 {
+			perm = "sys:user:add"
+		}
+		var scopeErr error
+		ctx, scopeErr = s.scopeContext(ctx, tx, p, perm)
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
 		in.Username = strings.ToLower(strings.TrimSpace(in.Username))
 		if !usernamePattern.MatchString(in.Username) || strings.TrimSpace(in.Nickname) == "" || in.Gender < 0 || in.Gender > 2 {
 			return nil, response.ErrInvalidParam
 		}
 		if in.DeptID != nil {
+			if err := s.checkDepartment(ctx, *in.DeptID); err != nil {
+				scope, _ := security.CurrentScope(ctx)
+				if id != p.ID || !scope.Self || scope.DepartmentID == nil || *scope.DepartmentID != *in.DeptID {
+					return nil, err
+				}
+			}
 			if *in.DeptID <= 0 {
 				return nil, response.ErrInvalidParam
 			}
@@ -104,7 +138,13 @@ func (s *Service) save(ctx context.Context, p security.Principal, id model.ID, i
 				return nil, err
 			}
 		}
-		oldName := ""
+
+		if id == 0 {
+			scope, _ := security.CurrentScope(ctx)
+			if !scope.All && in.DeptID == nil {
+				return nil, response.ErrPermission
+			}
+		}
 		if id == 0 {
 			if in.Username == "admin" {
 				return nil, response.ErrPermission
@@ -120,8 +160,13 @@ func (s *Service) save(ctx context.Context, p security.Principal, id model.ID, i
 			if err != nil {
 				return nil, httpx.DBError(err)
 			}
-			oldName = out.Username
+
 			if (id == 1 && in.Username != "admin") || (id != 1 && in.Username == "admin") {
+				return nil, response.ErrPermission
+			}
+		}
+		if in.DeptID == nil {
+			if scope, ok := security.CurrentScope(ctx); ok && !scope.All && (!scope.Self || out.ID != p.ID) {
 				return nil, response.ErrPermission
 			}
 		}
@@ -137,7 +182,7 @@ func (s *Service) save(ctx context.Context, p security.Principal, id model.ID, i
 		if err := s.repo.save(ctx, tx, &out, id == 0); err != nil {
 			return nil, httpx.DBError(err)
 		}
-		if id != 0 && oldName != out.Username {
+		if id != 0 {
 			return s.repo.bump(ctx, tx, []model.ID{id})
 		}
 		return nil, nil
@@ -154,6 +199,11 @@ func (s *Service) Status(ctx context.Context, p security.Principal, id model.ID,
 		return response.ErrPermission
 	}
 	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		var scopeErr error
+		ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:user:edit")
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
 		row, err := s.repo.get(ctx, tx, id)
 		if err != nil {
 			return nil, httpx.DBError(err)
@@ -191,6 +241,15 @@ func (s *Service) password(ctx context.Context, p security.Principal, id model.I
 		return response.ErrInvalidParam
 	}
 	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		var scopeErr error
+		if reset {
+			ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:user:resetPwd")
+		} else {
+			ctx = security.WithScope(ctx, security.Scope{Self: true, UserID: p.ID})
+		}
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
 		row, err := s.repo.get(ctx, tx, id)
 		if err != nil {
 			return nil, httpx.DBError(err)
@@ -234,6 +293,11 @@ func (s *Service) GrantRoles(ctx context.Context, p security.Principal, id model
 		return response.ErrPermission
 	}
 	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		var scopeErr error
+		ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:user:grant")
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
 		if _, err := s.repo.get(ctx, tx, id); err != nil {
 			return nil, httpx.DBError(err)
 		}
@@ -267,6 +331,11 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, ids []model.
 		return response.ErrPermission
 	}
 	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		var scopeErr error
+		ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:user:remove")
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
 		for _, id := range ids {
 			if _, err := s.repo.get(ctx, tx, id); err != nil {
 				return nil, httpx.DBError(err)

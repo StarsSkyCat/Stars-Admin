@@ -26,6 +26,7 @@ type Config struct {
 	Swagger   Swagger   `mapstructure:"swagger"`
 	CORS      CORS      `mapstructure:"cors"`
 	RateLimit RateLimit `mapstructure:"rate_limit"`
+	File      File      `mapstructure:"file"`
 }
 
 // App 定义 HTTP 服务和停机参数。
@@ -237,6 +238,9 @@ func (c *Config) ValidateDatabase() error {
 
 // ValidateServer 在启动 HTTP 前校验全部依赖与生产约束。
 func (c *Config) ValidateServer() error {
+	if c.File.LocalDir == "" || c.File.MaxSize < 1 || c.File.MaxSize > 100*1024*1024 || len(c.File.Extensions) == 0 || len(c.File.MIMETypes) == 0 {
+		return errors.New("文件根目录、大小或类型白名单无效")
+	}
 	if err := c.ValidateDatabase(); err != nil {
 		return err
 	}
@@ -274,4 +278,12 @@ func (c *Config) ValidateServer() error {
 		}
 	}
 	return nil
+}
+
+// File 定义本地文件限制，扩展名与内容类型必须同时匹配。
+type File struct {
+	LocalDir   string   `mapstructure:"local_dir"`
+	MaxSize    int64    `mapstructure:"max_size"`
+	Extensions []string `mapstructure:"extensions"`
+	MIMETypes  []string `mapstructure:"mime_types"`
 }

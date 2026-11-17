@@ -137,8 +137,14 @@ func (h *Handler) Remove(c *gin.Context) {
 }
 
 // RegisterRoutes 将每个动作与具体权限标识绑定。
-func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, required gin.HandlerFunc, permit func(string) gin.HandlerFunc) {
+func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, required gin.HandlerFunc, permit func(string) gin.HandlerFunc, duplicate ...gin.HandlerFunc) {
 	rg.Use(required)
+	lock := func(c *gin.Context) { c.Next() }
+	if len(duplicate) > 0 {
+		lock = duplicate[0]
+	}
+	rg.POST("/import", permit("sys:user:import"), lock, h.Import)
+	rg.POST("/export", permit("sys:user:export"), h.Export)
 	rg.GET("", permit("sys:user:list"), h.List)
 	rg.GET("/:id", permit("sys:user:get"), h.Get)
 	rg.POST("", permit("sys:user:add"), h.Create)
@@ -146,8 +152,9 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, required gin.HandlerFunc, 
 	rg.DELETE("/:ids", permit("sys:user:remove"), h.Remove)
 
 	rg.PUT("/:id/status", permit("sys:user:edit"), h.Status)
-	rg.PUT("/:id/password", permit("sys:user:resetPwd"), h.Password)
+	rg.PUT("/:id/password", permit("sys:user:resetPwd"), lock, h.Password)
 	rg.PUT("/:id/roles", permit("sys:user:grant"), h.Roles)
+	rg.PUT("/:id/posts", permit("sys:user:grant"), h.Posts)
 
 }
 
@@ -232,6 +239,35 @@ func (h *Handler) Roles(c *gin.Context) {
 		return
 	}
 	if err := h.service.GrantRoles(c.Request.Context(), httpx.Actor(c), id, in.RoleIDs); err != nil {
+		response.Fail(c, err)
+		return
+	}
+	response.OK(c, response.Status{Status: "ok"})
+}
+
+// Posts 替换岗位绑定。
+// @Summary 替换用户岗位
+// @Tags 用户管理
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "用户 ID"
+// @Param body body PostsInput true "岗位 ID 列表"
+// @Success 200 {object} response.Body[response.Status]
+// @Failure 400,401,403,404,409,503 {object} response.Body[any]
+// @Router /sys/users/{id}/posts [put]
+func (h *Handler) Posts(c *gin.Context) {
+	id, err := httpx.ParseID(c.Param("id"))
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+	var in PostsInput
+	if err := httpx.Bind(c, &in); err != nil {
+		response.Fail(c, err)
+		return
+	}
+	if err := h.service.GrantPosts(c.Request.Context(), httpx.Actor(c), id, in.PostIDs); err != nil {
 		response.Fail(c, err)
 		return
 	}

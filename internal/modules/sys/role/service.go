@@ -2,6 +2,7 @@ package role
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"slices"
 	"strings"
@@ -198,7 +199,7 @@ func (s *Service) GrantMenus(ctx context.Context, p security.Principal, id model
 	})
 }
 
-// GrantScope 仅 admin 可以配置尚未在 M3 生效的数据范围。
+// GrantScope 仅 admin 可以配置数据范围，后续读取即时按事实解析。
 func (s *Service) GrantScope(ctx context.Context, p security.Principal, id model.ID, in ScopeInput) error {
 	if !p.Admin() {
 		return response.ErrPermission
@@ -283,7 +284,7 @@ func (s *Service) Resolve(ctx context.Context, tx *gorm.DB, ids []model.ID) ([]m
 	return out, nil
 }
 
-// CanAssign 不允许通过普通账号转授 admin 或扩大尚未实施的数据范围。
+// CanAssign 限制普通账号只转授本人持有且仅本人范围的非 admin 角色。
 func (s *Service) CanAssign(ctx context.Context, tx *gorm.DB, p security.Principal, target model.ID, ids []model.ID) error {
 	for _, id := range ids {
 		row, err := s.repo.get(ctx, tx, id)
@@ -346,4 +347,36 @@ func (s *Service) Permissions(ctx context.Context, tx *gorm.DB, ids []model.ID) 
 // RemoveMenus 在菜单 service 的事务中解绑，不独立提交。
 func (s *Service) RemoveMenus(ctx context.Context, tx *gorm.DB, ids []model.ID) error {
 	return s.repo.removeMenus(ctx, tx, ids)
+}
+
+// ScopeRules 读取有效角色及其仍有效的自定义部门，供模块解析器合并。
+func (s *Service) ScopeRules(ctx context.Context, tx *gorm.DB, ids []model.ID) ([]security.ScopeRule, error) {
+	rows, err := s.repo.active(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	out := []security.ScopeRule{}
+	for _, r := range rows {
+		if !slices.Contains(ids, r.ID) {
+			continue
+		}
+		rule := security.ScopeRule{Kind: r.DataScope}
+		if r.DataScope == 2 {
+			depts, err := s.repo.depts(ctx, tx, r.ID)
+			if err != nil {
+				return nil, err
+			}
+			for _, id := range depts {
+				if err := s.depts.Exists(ctx, tx, id); err != nil {
+					if errors.Is(err, response.ErrNotFound) || errors.Is(err, response.ErrConflict) {
+						continue
+					}
+					return nil, err
+				}
+				rule.Departments = append(rule.Departments, id)
+			}
+		}
+		out = append(out, rule)
+	}
+	return out, nil
 }

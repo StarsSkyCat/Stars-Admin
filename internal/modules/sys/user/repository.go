@@ -20,7 +20,7 @@ func (r repository) conn(ctx context.Context, tx *gorm.DB) *gorm.DB {
 }
 func (r repository) get(ctx context.Context, tx *gorm.DB, id model.ID) (user, error) {
 	var row user
-	err := r.conn(ctx, tx).First(&row, "id = ?", id).Error
+	err := userScope(ctx, r.conn(ctx, tx)).First(&row, "id = ?", id).Error
 	return row, err
 }
 func (r repository) byName(ctx context.Context, name string) (user, error) {
@@ -29,7 +29,7 @@ func (r repository) byName(ctx context.Context, name string) (user, error) {
 	return row, err
 }
 func (r repository) list(ctx context.Context, q Query) ([]user, int64, error) {
-	db := r.conn(ctx, nil).Model(&user{})
+	db := userScope(ctx, r.conn(ctx, nil).Model(&user{}))
 	if q.Username != "" {
 		db = db.Where("username LIKE ?", "%"+q.Username+"%")
 	}
@@ -113,6 +113,9 @@ func (r repository) bump(ctx context.Context, tx *gorm.DB, ids []model.ID) ([]se
 func (r repository) remove(ctx context.Context, tx *gorm.DB, ids []model.ID, actor model.ID) error {
 	db := r.conn(ctx, tx)
 	if err := db.Where("user_id IN ?", ids).Delete(&userRole{}).Error; err != nil {
+		return err
+	}
+	if err := db.Where("user_id IN ?", ids).Delete(&userPost{}).Error; err != nil {
 		return err
 	}
 	if err := db.Model(&user{}).Where("id IN ?", ids).Update("updated_by", actor).Error; err != nil {

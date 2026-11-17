@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"time"
@@ -117,10 +118,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	for _, path := range []string{"/api/sys/users", "/api/sys/roles", "/api/sys/menus/tree", "/api/sys/depts/tree"} {
+	for _, path := range []string{"/api/sys/users", "/api/sys/roles", "/api/sys/menus/tree", "/api/sys/depts/tree", "/api/sys/posts/options", "/api/sys/dict/data/type/sys_status", "/api/sys/configs/key/sys.account.maxSessions", "/api/sys/audit/online", "/api/sys/audit/oper-logs", "/api/sys/audit/login-logs"} {
 		if _, err := c.request("GET", path, nil, pair.AccessToken, 200, 0); err != nil {
 			return err
 		}
+	}
+	if err := c.files(pair.AccessToken); err != nil {
+		return err
 	}
 	if _, err := c.request("POST", "/api/sys/auth/logout", nil, pair.AccessToken, 200, 0); err != nil {
 		return err
@@ -132,5 +136,61 @@ func main() {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Println("认证、首登改密与管理接口冒烟通过")
+	fmt.Println("认证、系统管理与文件流冒烟通过")
+}
+
+func (c client) files(access string) error {
+	payload := bytes.Repeat([]byte("m3-file-fixture\n"), 80000)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "smoke.txt")
+	if err != nil {
+		return err
+	}
+	if _, err = part.Write(payload); err != nil {
+		return err
+	}
+	if err = writer.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", c.base+"/api/sys/files/upload", &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+access)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	_ = res.Body.Close()
+	if err != nil || res.StatusCode != 200 {
+		return errors.New("生产文件上传失败")
+	}
+	var out struct {
+		Code int `json:"code"`
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil || out.Code != 0 || out.Data.ID == "" {
+		return errors.New("生产文件上传响应无效")
+	}
+	req, err = http.NewRequest("GET", c.base+"/api/sys/files/"+out.Data.ID+"/download", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+access)
+	res, err = c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	raw, err = io.ReadAll(io.LimitReader(res.Body, int64(len(payload))+1))
+	_ = res.Body.Close()
+	if err != nil || res.StatusCode != 200 || !bytes.Equal(raw, payload) {
+		return errors.New("生产文件下载内容不一致")
+	}
+	_, err = c.request("DELETE", "/api/sys/files/"+out.Data.ID, nil, access, 200, 0)
+	return err
 }

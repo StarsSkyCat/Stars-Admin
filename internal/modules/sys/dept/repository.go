@@ -11,7 +11,7 @@ import (
 type repository struct{ db *gorm.DB }
 
 func (r repository) list(ctx context.Context, q Query, column string, desc bool) ([]department, int64, error) {
-	db := r.conn(ctx, nil).Model(&department{})
+	db := departmentScope(ctx, r.conn(ctx, nil).Model(&department{}))
 	if q.Name != "" {
 		db = db.Where("name LIKE ?", "%"+q.Name+"%")
 	}
@@ -43,7 +43,7 @@ func (r repository) all(ctx context.Context, tx *gorm.DB) ([]department, error) 
 }
 func (r repository) get(ctx context.Context, tx *gorm.DB, id model.ID) (department, error) {
 	var row department
-	err := r.conn(ctx, tx).First(&row, "id = ?", id).Error
+	err := departmentScope(ctx, r.conn(ctx, tx)).First(&row, "id = ?", id).Error
 	return row, err
 }
 func (r repository) save(ctx context.Context, tx *gorm.DB, row *department, create bool) error {

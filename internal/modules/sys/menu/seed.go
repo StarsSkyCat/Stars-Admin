@@ -22,7 +22,7 @@ func (r repository) seedFind(ctx context.Context, tx *gorm.DB, parent model.ID, 
 	return menu{}, false, err
 }
 
-// Seed 仅补齐 M2 已实现功能的菜单和按钮，不改写已有节点或授权。
+// Seed 仅补齐 M1—M3 已实现功能的菜单和按钮，不改写已有节点或授权。
 func (s *Service) Seed(ctx context.Context, tx *gorm.DB) ([]model.ID, error) {
 	seedNode := func(parent model.ID, in Input) (menu, error) {
 		row, exists, err := s.repo.seedFind(ctx, tx, parent, in)
@@ -45,7 +45,7 @@ func (s *Service) Seed(ctx context.Context, tx *gorm.DB) ([]model.ID, error) {
 		return ids, nil
 	}
 	ids = append(ids, root.ID)
-	features := []struct{ code, name string }{{"user", "用户管理"}, {"role", "角色管理"}, {"menu", "菜单管理"}, {"dept", "部门管理"}}
+	features := []struct{ code, name string }{{"user", "用户管理"}, {"role", "角色管理"}, {"menu", "菜单管理"}, {"dept", "部门管理"}, {"post", "岗位管理"}, {"dict", "字典管理"}, {"config", "参数管理"}, {"file", "文件管理"}, {"audit", "日志审计"}}
 	for _, feature := range features {
 		node, err := seedNode(root.ID, Input{Name: feature.name, Type: 2, Path: new("/system/" + feature.code)})
 		if err != nil {
@@ -57,7 +57,16 @@ func (s *Service) Seed(ctx context.Context, tx *gorm.DB) ([]model.ID, error) {
 		ids = append(ids, node.ID)
 		actions := []string{"list", "get", "add", "edit", "remove"}
 		if feature.code == "user" {
-			actions = append(actions, "resetPwd", "grant")
+			actions = append(actions, "resetPwd", "grant", "import", "export")
+		}
+		if feature.code == "config" || feature.code == "dict" {
+			actions = append(actions, "refresh")
+		}
+		if feature.code == "file" {
+			actions = []string{"add", "get", "remove"}
+		}
+		if feature.code == "audit" {
+			actions = []string{"operList", "operClean", "operExport", "loginList", "loginClean", "loginExport", "onlineList", "forceLogout"}
 		}
 		if feature.code == "role" {
 			actions = append(actions, "grant")

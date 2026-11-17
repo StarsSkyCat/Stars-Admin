@@ -2,9 +2,9 @@
 
 基于 Go、Gin、GORM、PostgreSQL 和 Redis 的模块化单体中后台后端框架。
 
-当前已实现 M1 框架和 M2 认证与权限：JWT 双令牌、Redis 原子会话、Casbin、用户/角色/菜单/部门管理、登录审计及幂等 seed。M3 数据范围过滤验收前，系统管理入口仅有效 admin 可用，普通用户可使用本人认证接口。
+当前已实现 M1—M3：认证与 RBAC、用户/角色/菜单/部门/岗位、字典与参数缓存、受保护文件、异步审计、在线用户及 Excel 导入导出。用户和部门管理对具有相应权限的普通角色开放，并应用五档数据范围；角色、菜单、岗位、参数、字典管理和审计管理仍仅有效 admin 可用，登录用户可按类型读取启用字典。
 
-本地格式/lint/build、race 单元和集成测试、非 root 生产镜像冒烟均已通过；平台结果见 [GitHub Actions](https://github.com/StarsSkyCat/Stars-Admin/actions/workflows/ci.yaml)。
+M3 本地格式/lint/build、race 单元和集成测试、非 root 生产镜像冒烟均已通过；M3 尚未推送和进行平台验收。历史 M1/M2 平台结果见 [GitHub Actions](https://github.com/StarsSkyCat/Stars-Admin/actions/workflows/ci.yaml)。
 
 ## 快速开始
 
@@ -59,22 +59,43 @@ Makefile 的对应目标也可在已准备 Go/Make 和锁定工具的环境使�
 
 生产使用 configs/config.prod.yaml，必须通过环境变量提供非开发默认值的数据库密码及至少 32 字节的 JWT 密钥。生产默认 JSON 日志、关闭 Swagger、CORS 明确白名单，数据库 TLS 默认为 verify-full。密码哈希成本由 STARS_AUTH_BCRYPT_COST 设置，默认 10、范围 4—14，生产范围 10—14。
 
-所有环境都关闭 AutoMigrate；必须先运行迁移再启动 HTTP，当前最新版本为 2。dirty、未升级或超前版本会拒绝启动，不自动 force 或回退。二进制支持 `stars-admin [serve]`、`stars-admin migrate up|down|status`、`stars-admin seed`。迁移只读取数据库/日志配置；seed 额外读取哈希/节点配置，均不连接 Redis 或启动 HTTP。
+所有环境都关闭 AutoMigrate；必须先运行迁移再启动 HTTP，当前最新版本为 3（000003_system）。dirty、未升级或超前版本会拒绝启动，不自动 force 或回退。二进制支持 `stars-admin [serve]`、`stars-admin migrate up|down|status`、`stars-admin seed`。迁移只读取数据库/日志配置；seed 额外读取哈希/节点配置，均不连接 Redis 或启动 HTTP。
 
 普通 JSON 响应为 `{code,msg,data}`；ID 使用十进制字符串，时间统一 UTC/RFC3339，错误不透出内部细节。默认每个 IP/路由每分钟 120 次请求，探针和 Swagger 静态资源豁免；Redis 故障返回 503。请求日志仅记录固定元信息，不采集请求头、查询参数或请求体。
 
 雪花节点默认 0、范围 0—1023，不同应用实例必须由部署分配不同编号；本框架不提供节点自动分配或跨实例租约。
 
-M2 的一致性验收范围为单应用实例、单 Redis，不支持应用多副本策略同步或 Redis Cluster 跨槽 Lua。JWT 仅接受 HS256；Access 默认 30 分钟，会话从首次登录起最长七天，刷新不延长期限。每次认证核对数据库版本和 Redis；密码、状态或角色成员变化提升 auth_version，旧令牌在 Redis 清理失败及应用重启后仍不可用。策略同步失败时鉴权与 readiness 返回 503，后台重试恢复。
+M2/M3 的一致性边界为单应用实例、单 Redis，不支持应用多副本策略同步或 Redis Cluster 跨槽 Lua。JWT 仅接受 HS256；Access 默认 30 分钟，会话从首次登录起最长七天，刷新不延长期限。每次认证核对数据库版本和 Redis；密码、状态或角色成员变化提升 auth_version，旧令牌在 Redis 清理失败及应用重启后仍不可用。策略同步失败时鉴权与 readiness 返回 503，后台重试恢复。
 
-认证业务参数存放 sys_config：captchaEnabled=true、multiLogin=true、maxSessions=5、passwordRetryLimit=5、lockMinutes=10，键均以 `sys.account.` 开头。超过会话上限淘汰最早会话；关闭多点登录则新登录替换全部旧会话。缺失参数采用上述默认值，非法已有参数拒绝认证；参数管理接口在 M3 交付。
+认证业务参数存放 sys_config：captchaEnabled=true、multiLogin=true、maxSessions=5、passwordRetryLimit=5、lockMinutes=10，键均以 `sys.account.` 开头。超过会话上限淘汰最早会话；关闭多点登录则新登录替换全部旧会话。缺失参数采用上述默认值，非法已有参数拒绝认证；参数管理接口位于 `/api/sys/configs`，安全参数直接查库，普通按 key 查询使用缓存。
 
 除全局限流外，登录按 IP 20 次/分钟、账号 10 次/分钟；验证码按 IP 30 次/分钟；刷新按 IP 60 次/分钟、sid 30 次/分钟。只信任已配置的代理来源，验证码错误/过期/使用后失效，密码失败达到阈值锁定十分钟。
+
+## M3 系统管理
+
+- 岗位：`/api/sys/posts` CRUD 与 `GET /options`；`PUT /api/sys/users/:id/posts` 接收字符串 `postIds`，解绑后可重绑。
+- 字典：`/api/sys/dict/types`、`/data` CRUD；登录后 `GET /api/sys/dict/data/type/:type`。参数：`/api/sys/configs` CRUD 与 `GET /key/:key`。类型标识和参数 key 不可改名，内置参数不可删除。两类 `POST /cache/refresh` 分别绑定 refresh 权限。
+- 普通缓存 TTL 为 30 分钟，提交后失效重试最多三次，失败告警；并发读回填或失效故障可能短暂陈旧，认证读取不依赖这些缓存。
+- 文件：`POST /api/sys/files/upload`、`GET /:id/download`、`DELETE /:id`，分别要求 add/get/remove 权限。默认最大 10MB，可配置 txt/png/jpg/jpeg/pdf 子集，内容嗅探和扩展名同时检查。同所有者去重，读取和删除校验所有者或 admin，存储路径不返回客户端。
+- `file.local_dir` 默认 uploads，`file.max_size` 单位字节，`file.extensions` 和 `file.mime_types` 是双白名单。生产请为 /app/uploads 挂载持久卷并赋予 UID 65532 写权限；容器 TMPDIR 为 /app/tmp。物理删除失败保留 `sys_file_cleanup` 任务，重启后继续有界批次重试。
+- 审计：`/api/sys/audit/oper-logs`、`/login-logs` 支持分页、`DELETE /clean` 与 `POST /export`；`GET /online` 按会话展示，`DELETE /online/:userId` 撤销该用户全部 Access/Refresh。清空、导出、强退使用独立权限。在线摘要由 SCAN 读取并核对 Redis 状态与数据库版本，允许扫描期间短暂变化。
+- 操作日志只采集路由、可信主体、IP、traceId、响应 code/msg 与耗时，不采集请求、响应原文及认证/文件/Excel 内容。容量 1024，单 worker 每 50 条或一秒落库；队列满不阻塞，失败重试及丢弃可观测，属于尽力审计。
+- 五档范围为全部、自定义部门、本部门、本部门及以下、仅本人；只合并有效角色，部门路径按逗号边界，空集合拒绝。用户映射 dept_id/id，部门映射 id/当前用户部门；列表、详情、树/options、导出和写入目标一致过滤。批量任一目标越界整体拒绝。无归属映射的全局资源保持 admin 门禁。普通角色只能转授自己持有且仅本人范围的非 admin 角色；数据范围配置仍仅 admin。
+
+用户导入为 `POST /api/sys/users/import`，multipart 字段 file，单工作表 XLSX（xl/worksheets/sheet1.xml），最大 5MB、1000 条数据、26 列、单格 4096 字节、总解压 20MB，禁止公式。第一行固定为：
+
+```text
+username,nickname,password,deptId,roleIds,postIds,email,phone,gender
+```
+
+上述逗号代表分列；角色和岗位单元格内部用逗号分隔字符串 ID，所有 ID 列请使用文本格式。任一行无效返回 errors 行号与通用说明，imported=0，整批不写；不覆盖已有用户，初始密码遵守 12 字符/72 字节边界并强制首登改密。处理期限 30 秒，数据库事务仍遵守 database.timeout；HTTP write_timeout 默认 45 秒。导入与重置密码通过主体/路由/目标的随机所有者 Redis 锁防止并发重复提交，锁不提供重放幂等保证。
+
+`POST /api/sys/users/export` 支持与列表相同的过滤和范围，最多 10000 行；日志导出同样最多 10000 行。导出将所有字段写成文本并转义公式前缀，不含密码哈希和令牌。Excelize 锁定为 v2.11.1，新增依赖所需的 x/crypto 等传递版本同时锁定于 go.mod/go.sum。
 
 ## 生产镜像与验证
 
 ```sh
-docker build -f deployments/Dockerfile -t stars-admin:m2 .
+docker build -f deployments/Dockerfile -t stars-admin:m3 .
 ./scripts/smoke.sh
 ```
 
@@ -84,7 +105,7 @@ docker build -f deployments/Dockerfile -t stars-admin:m2 .
 
 ## 工程导读与本地文档
 
-业务使用 `internal/modules/{module}/{feature}` 的两级结构；sys 已实现 M2 功能，job/gen 仍为占位模块。框架能力集中在 internal/core，可复用工具位于 pkg，正式结构变更位于 migrations，容器配置位于 deployments。岗位、导入导出、文件、在线用户管理和五档数据过滤留在 M3，任务调度和代码生成留在 M4。
+业务使用 `internal/modules/{module}/{feature}` 的两级结构；sys 已实现 M3 功能，job/gen 仍为占位模块。框架能力集中在 internal/core，可复用工具位于 pkg，正式结构变更位于 migrations，容器配置位于 deployments。M3 能力和限制见上文，任务调度和代码生成留在 M4。
 
 按用户要求，docs/ 和 AGENTS.md 只保留在本地，不纳入 Git。Swagger 生成物同样忽略，所有构建和 CI 必须先运行 make swag，不能依赖已提交的生成文件。
 
@@ -95,3 +116,4 @@ docker build -f deployments/Dockerfile -t stars-admin:m2 .
 - [进度文档](./docs/进度文档.md)、[M1 开发文档](./docs/开发文档/M1-框架骨架.md)
 - [M1 验证记录](./docs/M1验证记录.md)、[文档审核记录](./docs/文档审核记录.md)
 - [M2 开发文档](./docs/开发文档/M2-认证与权限.md)、[M2 验证记录](./docs/M2验证记录.md)
+- [M3 开发文档](./docs/开发文档/M3-系统管理.md)、[M3 验证记录](./docs/M3验证记录.md)

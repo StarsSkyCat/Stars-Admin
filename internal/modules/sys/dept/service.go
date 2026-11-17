@@ -34,10 +34,11 @@ type Users interface {
 
 // Service 维护部门层级，不在 handler 暴露持久化对象。
 type Service struct {
-	repo  departmentStore
-	ids   idSource
-	gate  changeGate
-	users Users
+	repo   departmentStore
+	ids    idSource
+	gate   changeGate
+	users  Users
+	scopes security.Resolver
 }
 
 // New 构造部门业务。
@@ -61,7 +62,12 @@ func (s *Service) Exists(ctx context.Context, tx *gorm.DB, id model.ID) error {
 }
 
 // List 返回分页部门；排序字段只允许既有业务列。
-func (s *Service) List(ctx context.Context, q Query) (response.Page[View], error) {
+func (s *Service) list(ctx context.Context, q Query) (response.Page[View], error) {
+	var scopeErr error
+	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
+	if scopeErr != nil {
+		return response.Page[View]{}, scopeErr
+	}
 	if err := q.Normalize(); err != nil {
 		return response.Page[View]{}, err
 	}
@@ -81,24 +87,43 @@ func (s *Service) List(ctx context.Context, q Query) (response.Page[View], error
 }
 
 // Get 返回单个部门。
-func (s *Service) Get(ctx context.Context, id model.ID) (View, error) {
+func (s *Service) get(ctx context.Context, id model.ID) (View, error) {
+	var scopeErr error
+	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
+	if scopeErr != nil {
+		return View{}, scopeErr
+	}
 	row, err := s.repo.get(ctx, nil, id)
 	return view(row), httpx.DBError(err)
 }
 
 // Tree 返回按显示顺序排列的完整部门树。
-func (s *Service) Tree(ctx context.Context) ([]View, error) {
+func (s *Service) tree(ctx context.Context) ([]View, error) {
+	var scopeErr error
+	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
+	if scopeErr != nil {
+		return nil, scopeErr
+	}
 	rows, err := s.repo.all(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return buildTree(rows, 0), nil
+	return scopedTree(ctx, rows), nil
 }
 
 // Save 在一个事务中校验父链并更新整个子树路径。
 func (s *Service) Save(ctx context.Context, p security.Principal, id model.ID, in Input) (View, error) {
 	var out department
 	err := s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		perm := "sys:dept:edit"
+		if id == 0 {
+			perm = "sys:dept:add"
+		}
+		var scopeErr error
+		ctx, scopeErr = s.scopeContext(ctx, tx, p, perm)
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
 		rows, err := s.repo.all(ctx, tx)
 		if err != nil {
 			return nil, err
@@ -118,16 +143,30 @@ func (s *Service) Save(ctx context.Context, p security.Principal, id model.ID, i
 				return nil, httpx.DBError(err)
 			}
 		}
+		if in.ParentID == 0 && (id == 0 || out.ParentID != 0) {
+			if scope, ok := security.CurrentScope(ctx); ok && !scope.All {
+				return nil, response.ErrPermission
+			}
+		}
 		ancestors := "0"
-		if in.ParentID != 0 {
+		if id != 0 {
+			ancestors = out.Ancestors
+		}
+		if in.ParentID != 0 && (id == 0 || out.ParentID != in.ParentID) {
 			parent, err := s.repo.get(ctx, tx, in.ParentID)
 			if err != nil {
 				return nil, httpx.DBError(err)
+			}
+			if parent.Status != 1 {
+				return nil, response.ErrConflict
 			}
 			if parent.ID == out.ID || strings.Contains(","+parent.Ancestors+",", ","+strconv.FormatInt(int64(out.ID), 10)+",") {
 				return nil, response.ErrConflict
 			}
 			ancestors = parent.Ancestors + "," + strconv.FormatInt(int64(parent.ID), 10)
+		}
+		if in.ParentID == 0 {
+			ancestors = "0"
 		}
 		if len(ancestors) > 500 {
 			return nil, response.ErrInvalidParam
@@ -145,10 +184,13 @@ func (s *Service) Save(ctx context.Context, p security.Principal, id model.ID, i
 		if err := s.repo.save(ctx, tx, &out, id == 0); err != nil {
 			return nil, httpx.DBError(err)
 		}
-		if id != 0 {
+		if id != 0 && oldPrefix != ancestors+","+strconv.FormatInt(int64(out.ID), 10) {
 			newPrefix := ancestors + "," + strconv.FormatInt(int64(out.ID), 10)
 			for _, child := range rows {
 				if child.Ancestors == oldPrefix || strings.HasPrefix(child.Ancestors, oldPrefix+",") {
+					if err := checkDepartment(ctx, child.ID); err != nil {
+						return nil, err
+					}
 					child.Ancestors = newPrefix + strings.TrimPrefix(child.Ancestors, oldPrefix)
 					child.UpdatedBy = p.ID
 					if len(child.Ancestors) > 500 {
@@ -174,6 +216,11 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, ids []model.
 		return response.ErrInvalidParam
 	}
 	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		var scopeErr error
+		ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:dept:remove")
+		if scopeErr != nil {
+			return nil, scopeErr
+		}
 		rows, err := s.repo.all(ctx, tx)
 		if err != nil {
 			return nil, err

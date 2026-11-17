@@ -39,3 +39,10 @@ func TestUserReservedAndPasswordGuards(t *testing.T) {
 		t.Fatal("普通主体不能重置保留管理员密码")
 	}
 }
+
+func TestForceLogoutRequiresAdministratorBeforeWrite(t *testing.T) {
+	s := new(Service)
+	if err := s.RevokeAll(t.Context(), security.Principal{ID: 2}, 3); !errors.Is(err, response.ErrPermission) {
+		t.Fatal("无管理身份的强退必须在写入前拒绝")
+	}
+}

@@ -32,3 +32,11 @@ type userRole struct {
 }
 
 func (userRole) TableName() string { return "sys_user_role" }
+
+type userPost struct {
+	model.RelationBase
+	UserID model.ID
+	PostID model.ID
+}
+
+func (userPost) TableName() string { return "sys_user_post" }

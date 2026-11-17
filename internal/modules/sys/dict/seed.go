@@ -1,4 +1,4 @@
-// Package dict 目前仅提供种子初始化，字典管理与缓存随 M3 交付。
+// Package dict 提供字典类型、数据、缓存与幂等初始化。
 package dict
 
 import (
@@ -22,11 +22,13 @@ func (dictionaryType) TableName() string { return "sys_dict_type" }
 
 type dictionaryData struct {
 	model.Base
-	DictType string
-	Label    string
-	Value    string
-	Sort     int
-	Status   int
+	DictType  string
+	Label     string
+	Value     string
+	Sort      int
+	Tag       *string
+	IsDefault bool
+	Status    int
 }
 
 func (dictionaryData) TableName() string { return "sys_dict_data" }
