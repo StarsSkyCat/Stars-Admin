@@ -1,0 +1,57 @@
+services:
+  postgres:
+    image: postgres:17.12-bookworm@sha256:40865bc877a289da75963d97d72b59633f639fc5af7a4e856bfa3714cae5b536
+    environment:
+      POSTGRES_USER: stars
+      POSTGRES_PASSWORD: ${STARS_DATABASE_PASSWORD:-stars123}
+      POSTGRES_DB: ${STARS_DATABASE_DBNAME:-stars_admin}
+      TZ: UTC
+      PGTZ: UTC
+    ports:
+      - "127.0.0.1:${STARS_PG_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stars -d $$POSTGRES_DB"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7.4.12-bookworm@sha256:2e3eb11462c4e3759e6972678dd051d150ff54b1e60714b3c33b701260172a90
+    ports:
+      - "127.0.0.1:${STARS_REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  dev:
+    image: stars-admin-dev:go1.27.4
+    pull_policy: never
+    profiles: [dev]
+    build:
+      context: ..
+      dockerfile: deployments/Dockerfile.dev
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    environment:
+      HOME: /workspace/.cache/home
+      GOCACHE: /workspace/.cache/go-build
+      GOMODCACHE: /workspace/.cache/go-mod
+      GOPATH: /workspace/.cache/go
+      XDG_CACHE_HOME: /workspace/.cache
+      GOTOOLCHAIN: local
+      APP_ENV: ${APP_ENV:-dev}
+      STARS_DATABASE_HOST: postgres
+      STARS_DATABASE_PASSWORD: ${STARS_DATABASE_PASSWORD:-stars123}
+      STARS_DATABASE_DBNAME: ${STARS_DATABASE_DBNAME:-stars_admin}
+      STARS_REDIS_ADDR: redis:6379
+      STARS_INTEGRATION: ${STARS_INTEGRATION:-0}
+    ports:
+      - "127.0.0.1:${STARS_HTTP_PORT:-8080}:8080"
+    init: true
+    stop_grace_period: 15s
+volumes:
+  postgres-data:

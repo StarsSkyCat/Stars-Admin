@@ -1,0 +1,52 @@
+app:
+  name: stars-admin
+  env: dev
+  addr: ":8080"
+  read_header_timeout: 5s
+  read_timeout: 15s
+  write_timeout: 15s
+  idle_timeout: 60s
+  shutdown_timeout: 10s
+  trusted_proxies: []
+database:
+  driver: postgres
+  host: 127.0.0.1
+  port: 5432
+  username: stars
+  password: stars123
+  dbname: stars_admin
+  sslmode: disable
+  max_open_conns: 50
+  max_idle_conns: 10
+  conn_max_lifetime: 30m
+  timeout: 5s
+  auto_migrate: false
+redis:
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+  pool_size: 20
+  key_prefix: "stars:"
+  timeout: 2s
+id:
+  node: 0
+jwt:
+  secret: dev-secret-change-me
+  access_ttl: 30m
+  refresh_ttl: 168h
+  issuer: stars-admin
+log:
+  level: debug
+  format: console
+  file: logs/app.log
+  max_size: 100
+  max_backups: 10
+  max_age: 30
+swagger:
+  enabled: true
+cors:
+  origins: ["*"]
+rate_limit:
+  enabled: true
+  requests: 120
+  window: 1m

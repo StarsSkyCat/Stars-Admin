@@ -1,0 +1,9 @@
+.git
+.cache
+bin
+tmp
+logs
+uploads
+.env
+AGENTS.md
+docs

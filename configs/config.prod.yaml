@@ -1,0 +1,16 @@
+# 生产模板不携带真实密钥，由 STARS_ 环境变量提供。
+app:
+  env: prod
+database:
+  password: ""
+  sslmode: verify-full
+  auto_migrate: false
+jwt:
+  secret: ""
+log:
+  level: info
+  format: json
+swagger:
+  enabled: false
+cors:
+  origins: []

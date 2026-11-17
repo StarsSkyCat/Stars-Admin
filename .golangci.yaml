@@ -1,0 +1,31 @@
+version: "2"
+run:
+  timeout: 5m
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+    - depguard
+  settings:
+    depguard:
+      rules:
+        no-driver:
+          files: ["**/internal/modules/**/*.go"]
+          deny:
+            - pkg: "gorm.io/driver/"
+              desc: 数据库驱动只允许在 core/database 引入
+        core-boundary:
+          files: ["**/internal/core/**/*.go"]
+          deny:
+            - pkg: "github.com/StarsSkyCat/Stars-Admin/internal/modules/"
+              desc: 框架核心不得依赖业务模块
+        pkg-boundary:
+          files: ["**/pkg/**/*.go"]
+          deny:
+            - pkg: "github.com/StarsSkyCat/Stars-Admin/internal/"
+              desc: 公共工具不得依赖 internal
+formatters:
+  enable: [gofmt, goimports]

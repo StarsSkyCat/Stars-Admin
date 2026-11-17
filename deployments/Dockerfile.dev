@@ -1,0 +1,10 @@
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea
+
+ENV GOTOOLCHAIN=local
+RUN go install github.com/swaggo/swag/cmd/swag@v1.16.6
+RUN go install github.com/air-verse/air@v1.67.4
+RUN go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+RUN go install golang.org/x/tools/cmd/goimports@v0.52.0
+ENV PATH="/go/bin:${PATH}"
+WORKDIR /workspace
+CMD ["make", "run"]

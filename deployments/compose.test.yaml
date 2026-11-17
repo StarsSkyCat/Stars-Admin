@@ -1,0 +1,12 @@
+# 测试项目仅在独立网络中使用服务，避免占用开发端口。
+services:
+  postgres:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  dev:
+    ports: !reset []
+    environment:
+      APP_ENV: test
+      STARS_DATABASE_DBNAME: stars_admin_test
+      STARS_INTEGRATION: "1"

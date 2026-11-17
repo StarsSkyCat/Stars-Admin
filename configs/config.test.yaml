@@ -1,0 +1,10 @@
+app:
+  env: test
+database:
+  dbname: stars_admin_test
+log:
+  level: error
+  format: json
+  file: ""
+swagger:
+  enabled: false
