@@ -19,7 +19,7 @@ func TestDSNEscapesCredentialsAndSetsUTC(t *testing.T) {
 		t.Fatal("连接串转义或时区错误")
 	}
 	version, err := LatestVersion()
-	if err != nil || version != 3 {
-		t.Fatal("内嵌的 M3 迁移版本错误")
+	if err != nil || version != 5 {
+		t.Fatal("内嵌的 M4 迁移版本错误")
 	}
 }

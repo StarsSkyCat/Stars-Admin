@@ -92,7 +92,7 @@ func seedApp(t *testing.T, options ...func(*config.Config)) *App {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ORM.Exec("TRUNCATE sys_post,sys_file,sys_file_cleanup,sys_oper_log,sys_dept,sys_user,sys_role,sys_menu,sys_dict_type,sys_config,sys_login_log,casbin_rule RESTART IDENTITY CASCADE").Error; err != nil {
+	if err := db.ORM.Exec("TRUNCATE job_log,job_task,gen_table_column,gen_table,sys_post,sys_file,sys_file_cleanup,sys_oper_log,sys_dept,sys_user,sys_role,sys_menu,sys_dict_type,sys_config,sys_login_log,casbin_rule RESTART IDENTITY CASCADE").Error; err != nil {
 		t.Fatal(err)
 	}
 	ids, err := snowflake.New(cfg.ID.Node)

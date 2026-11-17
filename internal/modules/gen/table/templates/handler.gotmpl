@@ -1,0 +1,61 @@
+package {{.Feature}}
+import("{{.ModulePath}}/internal/core/httpx";"{{.ModulePath}}/internal/core/response";"github.com/gin-gonic/gin")
+// Handler 只绑定参数、调用服务并返回统一响应。
+type Handler struct{service *Service}
+// NewHandler 创建资源 HTTP 入口。
+func NewHandler(s *Service)*Handler{return &Handler{s}}
+// List 查询资源分页。
+// @Summary 查询{{.Feature}}列表
+// @Tags {{.Feature}}
+// @Security BearerAuth
+// @Produce json
+// @Param page query int false "页码"
+// @Param pageSize query int false "每页数量，最多100"
+// @Param orderBy query string false "白名单排序"
+// @Success 200 {object} response.Body[response.Page[View]]
+// @Failure 400,401,403,503 {object} response.Body[any]
+// @Router /{{.Module}}/{{.Business}} [get]
+func(h *Handler)List(c *gin.Context){var q Query;if err:=c.ShouldBindQuery(&q);err!=nil{response.Fail(c,response.ErrInvalidParam);return};out,err:=h.service.List(c.Request.Context(),httpx.Actor(c),q);if err!=nil{response.Fail(c,err);return};response.OK(c,out)}
+// Get 查询单个资源。
+// @Summary 查询{{.Feature}}详情
+// @Tags {{.Feature}}
+// @Security BearerAuth
+// @Produce json
+// @Param id path string true "资源ID"
+// @Success 200 {object} response.Body[View]
+// @Failure 400,401,403,404,503 {object} response.Body[any]
+// @Router /{{.Module}}/{{.Business}}/{id} [get]
+func(h *Handler)Get(c *gin.Context){id,err:=httpx.ParseID(c.Param("id"));if err!=nil{response.Fail(c,err);return};out,err:=h.service.Get(c.Request.Context(),httpx.Actor(c),id);if err!=nil{response.Fail(c,err);return};response.OK(c,out)}
+// Create 新增资源。
+// @Summary 新增{{.Feature}}
+// @Tags {{.Feature}}
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param body body Input true "业务参数"
+// @Success 200 {object} response.Body[View]
+// @Failure 400,401,403,409,503 {object} response.Body[any]
+// @Router /{{.Module}}/{{.Business}} [post]
+func(h *Handler)Create(c *gin.Context){var in Input;if err:=httpx.Bind(c,&in);err!=nil{response.Fail(c,err);return};out,err:=h.service.Create(c.Request.Context(),httpx.Actor(c),in);if err!=nil{response.Fail(c,err);return};response.OK(c,out)}
+// Save 编辑资源。
+// @Summary 编辑{{.Feature}}
+// @Tags {{.Feature}}
+// @Security BearerAuth
+// @Accept json
+// @Produce json
+// @Param id path string true "资源ID"
+// @Param body body Input true "业务参数"
+// @Success 200 {object} response.Body[View]
+// @Failure 400,401,403,404,409,503 {object} response.Body[any]
+// @Router /{{.Module}}/{{.Business}}/{id} [put]
+func(h *Handler)Save(c *gin.Context){id,err:=httpx.ParseID(c.Param("id"));if err!=nil{response.Fail(c,err);return};var in Input;if err:=httpx.Bind(c,&in);err!=nil{response.Fail(c,err);return};out,err:=h.service.Save(c.Request.Context(),httpx.Actor(c),id,in);if err!=nil{response.Fail(c,err);return};response.OK(c,out)}
+// Remove 批量删除资源。
+// @Summary 删除{{.Feature}}
+// @Tags {{.Feature}}
+// @Security BearerAuth
+// @Produce json
+// @Param ids path string true "最多100个逗号分隔ID"
+// @Success 200 {object} response.Body[response.Status]
+// @Failure 400,401,403,404,503 {object} response.Body[any]
+// @Router /{{.Module}}/{{.Business}}/{ids} [delete]
+func(h *Handler)Remove(c *gin.Context){ids,err:=httpx.IDs(c.Param("ids"));if err!=nil{response.Fail(c,err);return};if err:=h.service.Remove(c.Request.Context(),httpx.Actor(c),ids);err!=nil{response.Fail(c,err);return};response.OK(c,response.Status{Status:"ok"})}

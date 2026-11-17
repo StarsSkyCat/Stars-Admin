@@ -2,9 +2,9 @@
 
 基于 Go、Gin、GORM、PostgreSQL 和 Redis 的模块化单体中后台后端框架。
 
-当前已实现 M1—M3：认证与 RBAC、用户/角色/菜单/部门/岗位、字典与参数缓存、受保护文件、异步审计、在线用户及 Excel 导入导出。用户和部门管理对具有相应权限的普通角色开放，并应用五档数据范围；角色、菜单、岗位、参数、字典管理和审计管理仍仅有效 admin 可用，登录用户可按类型读取启用字典。
+当前已实现 M1—M4：认证与 RBAC、用户/角色/菜单/部门/岗位、字典与参数缓存、受保护文件、异步审计、在线用户及 Excel 导入导出，以及单实例任务调度、受限代码生成。用户和部门管理对具有相应权限的普通角色开放，并应用五档数据范围；角色、菜单、岗位、参数、字典管理和审计管理仍仅有效 admin 可用，登录用户可按类型读取启用字典。
 
-M3 本地格式/lint/build、race 单元和集成测试、非 root 生产镜像冒烟均已通过；M3 尚未推送和进行平台验收。历史 M1/M2 平台结果见 [GitHub Actions](https://github.com/StarsSkyCat/Stars-Admin/actions/workflows/ci.yaml)。
+M3/M4 已完成本地验收；M4 的完整回归、生成物实测和生产镜像冒烟均通过，证据见 [M4 验证记录](./docs/M4验证记录.md)。M3/M4 尚未推送和进行平台验收。历史 M1/M2 平台结果见 [GitHub Actions](https://github.com/StarsSkyCat/Stars-Admin/actions/workflows/ci.yaml)。
 
 ## 快速开始
 
@@ -59,7 +59,7 @@ Makefile 的对应目标也可在已准备 Go/Make 和锁定工具的环境使�
 
 生产使用 configs/config.prod.yaml，必须通过环境变量提供非开发默认值的数据库密码及至少 32 字节的 JWT 密钥。生产默认 JSON 日志、关闭 Swagger、CORS 明确白名单，数据库 TLS 默认为 verify-full。密码哈希成本由 STARS_AUTH_BCRYPT_COST 设置，默认 10、范围 4—14，生产范围 10—14。
 
-所有环境都关闭 AutoMigrate；必须先运行迁移再启动 HTTP，当前最新版本为 3（000003_system）。dirty、未升级或超前版本会拒绝启动，不自动 force 或回退。二进制支持 `stars-admin [serve]`、`stars-admin migrate up|down|status`、`stars-admin seed`。迁移只读取数据库/日志配置；seed 额外读取哈希/节点配置，均不连接 Redis 或启动 HTTP。
+所有环境都关闭 AutoMigrate；必须先运行迁移再启动 HTTP，当前最新版本为 5（000004_job、000005_gen）。dirty、未升级或超前版本会拒绝启动，不自动 force 或回退。二进制支持 `stars-admin [serve]`、`stars-admin migrate up|down|status`、`stars-admin seed`。迁移只读取数据库/日志配置；seed 额外读取哈希/节点配置，均不连接 Redis 或启动 HTTP。
 
 普通 JSON 响应为 `{code,msg,data}`；ID 使用十进制字符串，时间统一 UTC/RFC3339，错误不透出内部细节。默认每个 IP/路由每分钟 120 次请求，探针和 Swagger 静态资源豁免；Redis 故障返回 503。请求日志仅记录固定元信息，不采集请求头、查询参数或请求体。
 
@@ -92,10 +92,44 @@ username,nickname,password,deptId,roleIds,postIds,email,phone,gender
 
 `POST /api/sys/users/export` 支持与列表相同的过滤和范围，最多 10000 行；日志导出同样最多 10000 行。导出将所有字段写成文本并转义公式前缀，不含密码哈希和令牌。Excelize 锁定为 v2.11.1，新增依赖所需的 x/crypto 等传递版本同时锁定于 go.mod/go.sum。
 
+
+## M4 任务与代码生成
+
+job/gen 管理默认仅有效 admin，不能通过给普通角色分配菜单绕过门禁；首登改密限制同样生效。两模块只依赖 core/pkg，认证、审计和防重复提交由 app 注入。
+
+任务管理位于 `/api/job/tasks`：标准 CRUD、`PUT /:id/status`、`POST /:id/run`，以及 `GET /cron/next?expr=` 预览未来五次 UTC 触发。日志为 `GET /api/job/logs` 和独立权限的 `DELETE /clean`。新建固定暂停；手动执行允许暂停配置，返回 `state=queued` 或 `skipped`，不代表已经执行成功。
+
+Cron 固定六位含秒、UTC，拒绝时区覆盖与无未来触发。仅支持 app 显式注册的 target，内置 `demoTask` 参数为 JSON 字符串：`{"message":"示例","delayMs":0}`；延时范围 0—60000 毫秒，消息最多 200 字符，消息内容不进入任务日志。增加目标需要在 app 注册 Validate/Redact/Run，禁止 shell/eval。`job.timeout` 默认 30 秒，函数必须配合 context 取消；不响应取消的可信 Go 函数无法被强制终止。
+
+定时与手动入口共用按任务 ID 维护的门禁，重载和删除计划不重置在途状态；`concurrent=false` 时跳过记录为失败分类。`misfirePolicy=1` 仅表示每次进程启动至多补跑一次，`2` 等待下次计划；启用与编辑不会补跑。配置提交后同步失败会暂停新触发、readiness 返回 503，并后台重试；管理入口可用于修复存量错误配置。停机关闭触发并取消任务 context，等待任务结束，再排空有界日志队列。当前只支持单调度实例，多副本会重复执行；不提供分布式防重或精确补跑游标。
+
+生成器入口为 `/api/gen/tables`：
+
+| 动作 | 接口 |
+|---|---|
+| 可导入表 | `GET /db` |
+| 导入元数据 | `POST /import`，body 为 `{"tables":["demo_item"]}` |
+| 配置 CRUD | `GET /`、`GET/PUT /:id`、`DELETE /:ids` |
+| 同步结构 | `POST /:id/sync` |
+| 预览 | `GET /:id/preview` |
+| 输出 | `POST /:id/generate`，默认 zip |
+
+`gen.schema` 固定 public，`gen.allowed_prefixes` 默认 `[biz_, demo_]`。只允许普通业务表，排除 sys_/job_/gen_/pg_/sql_、casbin_rule、schema_migrations、视图及分区。读取实际 go.mod，精简镜像使用二进制构建信息确定 import 根路径；生成不依赖运行时 Go/goimports 工具。
+
+支持单 bigint 雪花主键和完整 Base 字段的表；业务字段支持 bigint/int/smallint、varchar/text/char、timestamp、boolean、numeric，保留 NULL、长度、精度、默认值、约束与索引。ID 字段使用字符串 DTO，numeric 使用十进制字符串，不转换 float64。复合键、identity/生成列、未知类型、缺少 Base 或包含密码/令牌等敏感字段的结构拒绝生成，需要手写业务实现。
+
+导入默认范围为 deny，须显式保存 `scope.mode=admin` 或 `mapped`。mapped 要求选择真实部门/归属字段，归属列须是已映射为 ID 的 bigint（id、*_id、created_by、updated_by）。普通角色访问生成物需在 app 注入真实 `system.Access()`、`system.ScopeResolver()` 与 `system.Guards()`；缺少任一授权/范围能力默认拒绝。原表增删列、类型或主键变化后先 sync，再重新确认配置；删除列不生成，保留按列名合并的人工配置。
+
+生成包包含 handler/service/repository/model/dto/routes、有效行为测试、`migration-drafts` up/down 和 ASSEMBLY.md。原表已存在，参考 SQL 不进入正式 migrations，不自动执行或自动装配。生成后需 review 业务规则、关联解绑与权限，再通过项目 lint/test/swag 和隔离 CRUD 验证。
+
+`gen.local_enabled=false`；生产禁止开启，开发时固定输出根目录 `gen.output_root=.generated`。local 拒绝越界、符号链接和已有文件，失败清理本轮新文件；zip 条目也校验为安全相对路径。不会改写 AGENTS.md、go.mod、module.go 或现有源码。
+
+可复现的实测流程与支持边界见 [使用手册](./docs/使用手册.md) 和 [M4 验证记录](./docs/M4验证记录.md)。
+
 ## 生产镜像与验证
 
 ```sh
-docker build -f deployments/Dockerfile -t stars-admin:m3 .
+docker build -f deployments/Dockerfile -t stars-admin:m4 .
 ./scripts/smoke.sh
 ```
 
@@ -105,7 +139,7 @@ docker build -f deployments/Dockerfile -t stars-admin:m3 .
 
 ## 工程导读与本地文档
 
-业务使用 `internal/modules/{module}/{feature}` 的两级结构；sys 已实现 M3 功能，job/gen 仍为占位模块。框架能力集中在 internal/core，可复用工具位于 pkg，正式结构变更位于 migrations，容器配置位于 deployments。M3 能力和限制见上文，任务调度和代码生成留在 M4。
+业务使用 `internal/modules/{module}/{feature}` 的两级结构；sys 已实现 M3 功能，job/gen 已实现 M4 能力。框架能力集中在 internal/core，可复用工具位于 pkg，正式结构变更位于 migrations，容器配置位于 deployments。M3/M4 能力和限制见上文，M5 质量汇总与发布尚未开始。
 
 按用户要求，docs/ 和 AGENTS.md 只保留在本地，不纳入 Git。Swagger 生成物同样忽略，所有构建和 CI 必须先运行 make swag，不能依赖已提交的生成文件。
 
@@ -117,3 +151,5 @@ docker build -f deployments/Dockerfile -t stars-admin:m3 .
 - [M1 验证记录](./docs/M1验证记录.md)、[文档审核记录](./docs/文档审核记录.md)
 - [M2 开发文档](./docs/开发文档/M2-认证与权限.md)、[M2 验证记录](./docs/M2验证记录.md)
 - [M3 开发文档](./docs/开发文档/M3-系统管理.md)、[M3 验证记录](./docs/M3验证记录.md)
+
+- [M4 开发文档](./docs/开发文档/M4-效率工具.md)、[M4 验证记录](./docs/M4验证记录.md)、[使用手册](./docs/使用手册.md)

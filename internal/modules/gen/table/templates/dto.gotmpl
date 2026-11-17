@@ -1,0 +1,17 @@
+package {{.Feature}}
+import("{{.ModulePath}}/internal/core/httpx";"{{.ModulePath}}/internal/core/model";"{{.ModulePath}}/internal/core/response";"time")
+// Input 不接收 ID、创建人、更新人或权限范围；非空字段用指针区分缺失与零值。
+type Input struct{Remark *string `json:"remark" binding:"omitempty,max=500"`
+{{range .Fields}}{{if .Input}}{{.GoField}} *{{.GoType}} {{tag .JSONTag}}
+{{end}}{{end}}}
+// View 只输出配置允许展示的业务字段。
+type View struct{httpx.Meta;Remark *string `json:"remark"`
+{{range .Fields}}{{if .IsList}}{{.GoField}} {{.ModelType}} {{tag .JSONTag}}
+{{end}}{{end}}}
+// Query 的筛选字段和运算符均在生成时固定。
+type Query struct{response.PageQuery
+{{range .Fields}}{{if .IsQuery}}{{.GoField}} string {{tag .FormTag}}
+{{if .Between}}{{.GoField}}To string {{tag .ToTag}}
+{{end}}{{end}}{{end}}}
+func view(r entity)View{return View{ID:r.ID,CreatedAt:r.CreatedAt,UpdatedAt:r.UpdatedAt,Remark:r.Remark,
+{{range .Fields}}{{if .IsList}}{{.GoField}}:r.{{.GoField}},{{end}}{{end}}}}

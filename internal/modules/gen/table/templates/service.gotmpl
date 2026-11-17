@@ -1,0 +1,30 @@
+package {{.Feature}}
+import("context";"regexp";"strconv";"strings";"time";"unicode/utf8";"{{.ModulePath}}/internal/core/httpx";"{{.ModulePath}}/internal/core/model";"{{.ModulePath}}/internal/core/response";"{{.ModulePath}}/internal/core/security";"gorm.io/gorm")
+type idSource interface{Next()(int64,error)}
+// Access 必须注入真实授权与安全读门禁，缺失时拒绝访问。
+type Access interface{Allow(security.Principal,string)error;Read(func()error)error}
+// Service 使用注入的授权和范围解析能力，不查询其他功能表。
+type Service struct{repo store;ids idSource;access Access;scopes security.Resolver}
+// New 创建业务能力，调用方负责显式装配认证和范围解析。
+func New(db *gorm.DB,ids idSource,access Access,scopes security.Resolver)*Service{return &Service{repository{db},ids,access,scopes}}
+func(s *Service)execute(ctx context.Context,p security.Principal,action string,fn func(security.Scope)error)error{if p.ID<=0||s.access==nil||s.scopes==nil{return response.ErrPermission};return s.access.Read(func()error{if err:=s.access.Allow(p,{{q .PermissionPrefix}}+action);err!=nil{return err};scope,err:=s.scopes.Resolve(ctx,nil,p);if err!=nil{return err};{{if .AdminOnly}}if !p.Admin()||!scope.All{return response.ErrPermission}{{end}};return fn(scope)})}
+func matches(scope security.Scope,row entity)bool{ {{if .AdminOnly}}return scope.All{{else}}if scope.All{return true};{{.MatchCode}};return false{{end}} }
+func apply(row *entity,in Input,create bool)([]string,error){columns:=[]string{"id","created_by","updated_by","created_at","updated_at","remark"};if in.Remark!=nil&&utf8.RuneCountInString(*in.Remark)>500{return nil,response.ErrInvalidParam};row.Remark=in.Remark
+{{range .Fields}}{{if .Input}}
+{{.ApplyCode}}
+{{end}}{{end}}
+return columns,nil}
+// Create 只生成新的雪花 ID，创建和返回对象使用同一资源范围。
+func(s *Service)Create(ctx context.Context,p security.Principal,in Input)(View,error){var row entity;err:=s.execute(ctx,p,"add",func(scope security.Scope)error{return s.repo.transaction(ctx,func(tx *gorm.DB)error{n,err:=s.ids.Next();if err!=nil{return err};row=entity{ID:model.ID(n),CreatedBy:p.ID,UpdatedBy:p.ID};columns,err:=apply(&row,in,true);if err!=nil{return err};if !matches(scope,row){return response.ErrPermission};return httpx.DBError(s.repo.create(ctx,tx,&row,columns))})});return view(row),err}
+// Save 先锁定可见对象，再校验更新后对象仍在当前范围。
+func(s *Service)Save(ctx context.Context,p security.Principal,id model.ID,in Input)(View,error){if id<=0{return View{},response.ErrInvalidParam};var row entity;err:=s.execute(ctx,p,"edit",func(scope security.Scope)error{return s.repo.transaction(ctx,func(tx *gorm.DB)error{var err error;row,err=s.repo.get(ctx,tx,scope,id,true);if err!=nil{return httpx.DBError(err)};if _,err:=apply(&row,in,false);err!=nil{return err};if !matches(scope,row){return response.ErrPermission};row.UpdatedBy=p.ID;return httpx.DBError(s.repo.save(ctx,tx,&row))})});return view(row),err}
+// Get 查询详情时应用与列表一致的范围。
+func(s *Service)Get(ctx context.Context,p security.Principal,id model.ID)(View,error){if id<=0{return View{},response.ErrInvalidParam};var row entity;err:=s.execute(ctx,p,"get",func(scope security.Scope)error{var err error;row,err=s.repo.get(ctx,nil,scope,id,false);return httpx.DBError(err)});return view(row),err}
+// List 分页、排序和查询运算符均由服务端固定映射。
+func(s *Service)List(ctx context.Context,p security.Principal,q Query)(response.Page[View],error){out:=response.Page[View]{List:[]View{}};err:=s.execute(ctx,p,"list",func(scope security.Scope)error{if err:=q.Normalize();err!=nil{return err};column,desc,err:=q.Sort(map[string]string{"id":"id","createdAt":"created_at"{{range .Fields}}{{if .IsList}},{{q .JSONField}}:{{q .ColumnName}}{{end}}{{end}}});if err!=nil{return err};if column==""{column="id"};filters:=[]filter{}
+{{range .Fields}}{{if .IsQuery}}{{.QueryCode}}
+{{end}}{{end}}
+rows,total,err:=s.repo.list(ctx,scope,q,filters,column,desc);if err!=nil{return err};out.Total=total;out.Page=q.Page;out.PageSize=q.PageSize;for _,r:=range rows{out.List=append(out.List,view(r))};return nil});return out,err}
+// Remove 批量任一目标不可见则整体不写，关联解绑规则需按业务补充。
+func(s *Service)Remove(ctx context.Context,p security.Principal,ids []model.ID)error{if err:=httpx.UniqueIDs(ids);err!=nil{return err};if len(ids)==0{return response.ErrInvalidParam};return s.execute(ctx,p,"remove",func(scope security.Scope)error{return s.repo.transaction(ctx,func(tx *gorm.DB)error{for _,id:=range ids{if _,err:=s.repo.get(ctx,tx,scope,id,true);err!=nil{return httpx.DBError(err)}};return s.repo.remove(ctx,tx,scope,ids)})})}
+{{.Helpers}}

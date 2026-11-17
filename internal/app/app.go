@@ -32,6 +32,7 @@ type App struct {
 	ready   atomic.Bool
 	cleanup server.Cleanup
 	system  *sys.Module
+	jobs    *job.Module
 }
 
 // New 任意初始化步骤失败时按逆序释放已获得资源。
@@ -70,7 +71,17 @@ func New(ctx context.Context, cfg *config.Config, log *zap.Logger) (application 
 		return nil, err
 	}
 	a.cleanup.Add(a.system.Close)
-	a.router, err = NewRouter(cfg, log, a.cache, a.Ready, a.system, job.New(deps), gen.New(deps))
+	registry, err := jobTargets()
+	if err != nil {
+		return nil, err
+	}
+	generated, err := gen.New(deps, a.system.Guards())
+	if err != nil {
+		return nil, err
+	}
+	a.jobs = job.New(ctx, deps, a.system.Guards(), registry)
+	a.cleanup.Add(a.jobs.Close)
+	a.router, err = NewRouter(cfg, log, a.cache, a.Ready, a.system, a.jobs, generated)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +102,9 @@ func (a *App) Ready(ctx context.Context) error {
 	if err := a.system.Ready(ctx); err != nil {
 		return err
 	}
+	if err := a.jobs.Ready(ctx); err != nil {
+		return err
+	}
 	redisCtx, cancelRedis := context.WithTimeout(ctx, a.cfg.Redis.Timeout)
 	defer cancelRedis()
 	return a.cache.Ping(redisCtx).Err()
@@ -105,6 +119,7 @@ func (a *App) Run(ctx context.Context) error {
 	a.log.Info("HTTP 服务已启动", zap.String("addr", listener.Addr().String()), zap.String("env", a.cfg.App.Env))
 	return server.Run(ctx, listener, a.router, a.cfg.App, func() {
 		a.ready.Store(false)
+		a.jobs.StopScheduling()
 		a.log.Info("HTTP 服务开始优雅停机")
 	})
 }

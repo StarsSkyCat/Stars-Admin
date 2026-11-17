@@ -1,0 +1,22 @@
+package {{.Feature}}
+import("context";"errors";"testing";"time";"{{.ModulePath}}/internal/core/model";"{{.ModulePath}}/internal/core/response";"{{.ModulePath}}/internal/core/security";"gorm.io/gorm")
+type fakeIDs struct{}
+func(fakeIDs)Next()(int64,error){return 99,nil}
+type fakeAccess struct{denied bool}
+func(f fakeAccess)Read(fn func()error)error{return fn()}
+func(f fakeAccess)Allow(security.Principal,string)error{if f.denied{return response.ErrPermission};return nil}
+type memoryStore struct{row entity;exists bool;err error;removed bool}
+func(m *memoryStore)transaction(_ context.Context,fn func(*gorm.DB)error)error{return fn(nil)}
+func(m *memoryStore)list(_ context.Context,s security.Scope,_ Query,_ []filter,_ string,_ bool)([]entity,int64,error){if m.err!=nil{return nil,0,m.err};if m.exists&&matches(s,m.row){return []entity{m.row},1,nil};return []entity{},0,nil}
+func(m *memoryStore)get(_ context.Context,_ *gorm.DB,s security.Scope,id model.ID,_ bool)(entity,error){if m.err!=nil{return entity{},m.err};if !m.exists||m.row.ID!=id||!matches(s,m.row){return entity{},gorm.ErrRecordNotFound};return m.row,nil}
+func(m *memoryStore)create(_ context.Context,_ *gorm.DB,row *entity,_ []string)error{if m.err!=nil{return m.err};m.row=*row;m.exists=true;return nil}
+func(m *memoryStore)save(_ context.Context,_ *gorm.DB,row *entity)error{m.row=*row;return m.err}
+func(m *memoryStore)remove(_ context.Context,_ *gorm.DB,_ security.Scope,_ []model.ID)error{m.removed=true;m.exists=false;return m.err}
+func sampleInput()Input{return Input{ {{range .Fields}}{{if .IsInsert}}{{.GoField}}:new({{.Sample}}),{{end}}{{end}} }}
+func TestServiceCRUDAndBatchRollback(t *testing.T){repo:=new(memoryStore);s:=&Service{repo:repo,ids:fakeIDs{},access:fakeAccess{},scopes:fixedScope{s:security.Scope{All:true}}};p:=security.Principal{ID:2,RoleIDs:[]model.ID{1}};out,err:=s.Create(t.Context(),p,sampleInput());if err!=nil||out.ID!=99{t.Fatalf("创建结果无效 %v",err)};page,err:=s.List(t.Context(),p,Query{});if err!=nil||page.Total!=1||len(page.List)!=1{t.Fatal("分页结果无效")};if _,err:=s.Get(t.Context(),p,99);err!=nil{t.Fatal(err)};if _,err:=s.Save(t.Context(),p,99,sampleInput());err!=nil{t.Fatal(err)};if err:=s.Remove(t.Context(),p,[]model.ID{99,100});!errors.Is(err,response.ErrNotFound)||repo.removed{t.Fatal("批量越界导致部分写入")};if err:=s.Remove(t.Context(),p,[]model.ID{99});err!=nil||!repo.removed{t.Fatal("删除失败")}}
+func TestServiceRejectsParamsPermissionAndRepositoryFailure(t *testing.T){repo:=new(memoryStore);s:=&Service{repo:repo,ids:fakeIDs{},access:fakeAccess{denied:true},scopes:fixedScope{s:security.Scope{All:true}}};p:=security.Principal{ID:2,RoleIDs:[]model.ID{1}};if _,err:=s.Create(t.Context(),p,sampleInput());!errors.Is(err,response.ErrPermission)||repo.exists{t.Fatal("越权写入未拒绝")};if _,err:=s.Get(t.Context(),p,0);!errors.Is(err,response.ErrInvalidParam){t.Fatal("非法ID未拒绝")};s.access=fakeAccess{};broken:=errors.New("仓储故障");repo.err=broken;if _,err:=s.List(t.Context(),p,Query{});!errors.Is(err,broken){t.Fatal("仓储故障被吞掉")};s.access=nil;if _,err:=s.List(t.Context(),p,Query{});!errors.Is(err,response.ErrPermission){t.Fatal("缺失授权能力未默认拒绝")}}
+type fixedScope struct{s security.Scope}
+func(f fixedScope)Resolve(context.Context,*gorm.DB,security.Principal)(security.Scope,error){return f.s,nil}
+{{if not .AdminOnly}}
+func TestServiceEmptyScopeDeniesData(t *testing.T){repo:=&memoryStore{row:entity{ID:9,CreatedBy:3},exists:true};s:=&Service{repo:repo,ids:fakeIDs{},access:fakeAccess{},scopes:fixedScope{}};p:=security.Principal{ID:2};page,err:=s.List(t.Context(),p,Query{});if err!=nil||page.Total!=0{t.Fatal("空范围泄漏列表")};if _,err:=s.Get(t.Context(),p,9);!errors.Is(err,response.ErrNotFound){t.Fatal("空范围泄漏详情")};if err:=s.Remove(t.Context(),p,[]model.ID{9});!errors.Is(err,response.ErrNotFound)||repo.removed{t.Fatal("空范围允许删除")}}
+{{end}}

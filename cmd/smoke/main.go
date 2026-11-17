@@ -118,12 +118,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	for _, path := range []string{"/api/sys/users", "/api/sys/roles", "/api/sys/menus/tree", "/api/sys/depts/tree", "/api/sys/posts/options", "/api/sys/dict/data/type/sys_status", "/api/sys/configs/key/sys.account.maxSessions", "/api/sys/audit/online", "/api/sys/audit/oper-logs", "/api/sys/audit/login-logs"} {
+	for _, path := range []string{"/api/sys/users", "/api/sys/roles", "/api/sys/menus/tree", "/api/sys/depts/tree", "/api/sys/posts/options", "/api/sys/dict/data/type/sys_status", "/api/sys/configs/key/sys.account.maxSessions", "/api/sys/audit/online", "/api/sys/audit/oper-logs", "/api/sys/audit/login-logs", "/api/job/tasks", "/api/job/logs", "/api/gen/tables", "/api/gen/tables/db"} {
 		if _, err := c.request("GET", path, nil, pair.AccessToken, 200, 0); err != nil {
 			return err
 		}
 	}
 	if err := c.files(pair.AccessToken); err != nil {
+		return err
+	}
+	if err := c.generation(pair.AccessToken); err != nil {
+		return err
+	}
+	if err := c.runningTask(pair.AccessToken); err != nil {
 		return err
 	}
 	if _, err := c.request("POST", "/api/sys/auth/logout", nil, pair.AccessToken, 200, 0); err != nil {
@@ -136,7 +142,7 @@ func main() {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Println("认证、系统管理与文件流冒烟通过")
+	fmt.Println("认证、系统管理、文件和 M4 工具冒烟通过")
 }
 
 func (c client) files(access string) error {

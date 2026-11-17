@@ -1,0 +1,4 @@
+package {{.Feature}}
+import("{{.ModulePath}}/internal/core/httpx";"github.com/gin-gonic/gin")
+// RegisterRoutes 每个动作绑定具体权限，缺失认证或授权默认拒绝。
+func(h *Handler)RegisterRoutes(rg *gin.RouterGroup,guards httpx.Guards){guards=guards.Normalize();rg.Use(guards.Required,guards.Operations);rg.GET("",guards.Permit({{q .PermissionPrefix}}+"list"),h.List);rg.GET("/:id",guards.Permit({{q .PermissionPrefix}}+"get"),h.Get);rg.POST("",guards.Permit({{q .PermissionPrefix}}+"add"),h.Create);rg.PUT("/:id",guards.Permit({{q .PermissionPrefix}}+"edit"),h.Save);rg.DELETE("/:ids",guards.Permit({{q .PermissionPrefix}}+"remove"),h.Remove)}

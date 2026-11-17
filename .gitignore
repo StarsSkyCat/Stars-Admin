@@ -10,3 +10,6 @@
 /uploads/
 /.env
 /coverage.out
+
+# 开发环境的代码生成输出
+/.generated/

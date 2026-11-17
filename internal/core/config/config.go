@@ -27,6 +27,8 @@ type Config struct {
 	CORS      CORS      `mapstructure:"cors"`
 	RateLimit RateLimit `mapstructure:"rate_limit"`
 	File      File      `mapstructure:"file"`
+	Job       Job       `mapstructure:"job"`
+	Gen       Gen       `mapstructure:"gen"`
 }
 
 // App 定义 HTTP 服务和停机参数。
@@ -238,6 +240,9 @@ func (c *Config) ValidateDatabase() error {
 
 // ValidateServer 在启动 HTTP 前校验全部依赖与生产约束。
 func (c *Config) ValidateServer() error {
+	if c.Job.Timeout <= 0 || c.Job.Timeout > time.Hour || c.Gen.Schema != "public" || len(c.Gen.AllowedPrefixes) == 0 || c.Gen.OutputRoot == "" || (c.App.Env == "prod" && c.Gen.LocalEnabled) {
+		return errors.New("任务超时、生成范围或 local 输出配置无效")
+	}
 	if c.File.LocalDir == "" || c.File.MaxSize < 1 || c.File.MaxSize > 100*1024*1024 || len(c.File.Extensions) == 0 || len(c.File.MIMETypes) == 0 {
 		return errors.New("文件根目录、大小或类型白名单无效")
 	}
@@ -286,4 +291,17 @@ type File struct {
 	MaxSize    int64    `mapstructure:"max_size"`
 	Extensions []string `mapstructure:"extensions"`
 	MIMETypes  []string `mapstructure:"mime_types"`
+}
+
+// Job 定义可信任务函数执行期限。
+type Job struct {
+	Timeout time.Duration `mapstructure:"timeout"`
+}
+
+// Gen 仅允许 public 的业务表前缀，local 只在显式启用的非生产环境使用。
+type Gen struct {
+	Schema          string   `mapstructure:"schema"`
+	AllowedPrefixes []string `mapstructure:"allowed_prefixes"`
+	LocalEnabled    bool     `mapstructure:"local_enabled"`
+	OutputRoot      string   `mapstructure:"output_root"`
 }

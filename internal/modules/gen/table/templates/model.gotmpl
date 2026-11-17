@@ -1,0 +1,7 @@
+// Package {{.Feature}} 提供{{.Feature}}资源的基础管理能力，接入前须完成业务复核。
+package {{.Feature}}
+import("{{.ModulePath}}/internal/core/model";"time")
+type entity struct{model.Base
+{{range .Fields}}{{.GoField}} {{.ModelType}} {{tag .ModelTag}}
+{{end}}}
+func(entity)TableName()string{return {{q .Table}}}

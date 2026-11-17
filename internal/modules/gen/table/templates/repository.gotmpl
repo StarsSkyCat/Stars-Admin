@@ -1,0 +1,14 @@
+package {{.Feature}}
+import("context";"{{.ModulePath}}/internal/core/model";"{{.ModulePath}}/internal/core/security";"gorm.io/gorm";"gorm.io/gorm/clause")
+type filter struct{column string;operator string;values []any}
+type store interface{transaction(context.Context,func(*gorm.DB)error)error;list(context.Context,security.Scope,Query,[]filter,string,bool)([]entity,int64,error);get(context.Context,*gorm.DB,security.Scope,model.ID,bool)(entity,error);create(context.Context,*gorm.DB,*entity,[]string)error;save(context.Context,*gorm.DB,*entity)error;remove(context.Context,*gorm.DB,security.Scope,[]model.ID)error}
+type repository struct{db *gorm.DB}
+func(r repository)conn(ctx context.Context,tx *gorm.DB)*gorm.DB{if tx==nil{tx=r.db};return tx.WithContext(ctx)}
+func(r repository)transaction(ctx context.Context,fn func(*gorm.DB)error)error{return r.conn(ctx,nil).Transaction(fn)}
+func scoped(db *gorm.DB,scope security.Scope)*gorm.DB{
+{{if .AdminOnly}}if scope.All{return db};return db.Where("1 = 0"){{else}}return scope.Apply(db,{{q .DepartmentColumn}},{{q .OwnerColumn}},false){{end}}}
+func(r repository)list(ctx context.Context,scope security.Scope,q Query,filters []filter,column string,desc bool)([]entity,int64,error){db:=scoped(r.conn(ctx,nil).Model(&entity{}),scope);for _,f:=range filters{switch f.operator{case "EQ":db=db.Where(clause.Eq{Column:clause.Column{Name:f.column},Value:f.values[0]});case "NE":db=db.Where(clause.Neq{Column:clause.Column{Name:f.column},Value:f.values[0]});case "LIKE":db=db.Where(clause.Like{Column:clause.Column{Name:f.column},Value:f.values[0]});case "BETWEEN":db=db.Where(clause.Gte{Column:clause.Column{Name:f.column},Value:f.values[0]}).Where(clause.Lte{Column:clause.Column{Name:f.column},Value:f.values[1]})}};var total int64;if err:=db.Count(&total).Error;err!=nil{return nil,0,err};rows:=[]entity{};err:=db.Order(clause.OrderByColumn{Column:clause.Column{Name:column},Desc:desc}).Offset((q.Page-1)*q.PageSize).Limit(q.PageSize).Find(&rows).Error;return rows,total,err}
+func(r repository)get(ctx context.Context,tx *gorm.DB,scope security.Scope,id model.ID,lock bool)(entity,error){db:=scoped(r.conn(ctx,tx),scope);if lock{db=db.Clauses(clause.Locking{Strength:"UPDATE"})};var row entity;err:=db.First(&row,"id = ?",id).Error;return row,err}
+func(r repository)create(ctx context.Context,tx *gorm.DB,row *entity,columns []string)error{db:=r.conn(ctx,tx);if err:=db.Select(columns).Create(row).Error;err!=nil{return err};return db.First(row,"id = ?",row.ID).Error}
+func(r repository)save(ctx context.Context,tx *gorm.DB,row *entity)error{return r.conn(ctx,tx).Save(row).Error}
+func(r repository)remove(ctx context.Context,tx *gorm.DB,scope security.Scope,ids []model.ID)error{return scoped(r.conn(ctx,tx),scope).Delete(&entity{},"id IN ?",ids).Error}

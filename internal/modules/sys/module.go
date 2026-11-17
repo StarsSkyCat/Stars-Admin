@@ -9,6 +9,7 @@ import (
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/cache"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/httpx"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/middleware"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/model"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/permission"
@@ -46,6 +47,7 @@ type Module struct {
 	auditService   *audit.Service
 	fileService    *file.Service
 	duplicate      gin.HandlerFunc
+	resolver       security.Resolver
 }
 
 type features struct {
@@ -148,7 +150,7 @@ func New(ctx context.Context, deps core.Deps) (*Module, error) {
 		return nil, err
 	}
 	loginAudit.Start(deps.Logger)
-	return &Module{authentication: auth.NewHandler(authentication), users: user.NewHandler(f.users), roles: role.NewHandler(f.roles), menus: menu.NewHandler(f.menus), depts: dept.NewHandler(f.depts), security: gate, timeout: deps.Config.Database.Timeout, posts: post.NewHandler(posts), configs: sysconfig.NewHandler(settings), dicts: dict.NewHandler(dictionaries), files: file.NewHandler(files, deps.Config.File.MaxSize), audits: audit.NewHandler(loginAudit), auditService: loginAudit, fileService: files, duplicate: middleware.DuplicateSubmit(deps.Redis, deps.Config.Redis.KeyPrefix)}, nil
+	return &Module{authentication: auth.NewHandler(authentication), users: user.NewHandler(f.users), roles: role.NewHandler(f.roles), menus: menu.NewHandler(f.menus), depts: dept.NewHandler(f.depts), security: gate, timeout: deps.Config.Database.Timeout, posts: post.NewHandler(posts), configs: sysconfig.NewHandler(settings), dicts: dict.NewHandler(dictionaries), files: file.NewHandler(files, deps.Config.File.MaxSize), audits: audit.NewHandler(loginAudit), auditService: loginAudit, fileService: files, duplicate: middleware.DuplicateSubmit(deps.Redis, deps.Config.Redis.KeyPrefix), resolver: scopeResolver{f}}, nil
 }
 
 // Name 返回系统模块路由前缀。
@@ -208,3 +210,19 @@ func requestTimeout(route string, normal time.Duration) time.Duration {
 	}
 	return normal
 }
+
+// Guards 向装配层提供认证与横切能力，其他模块无需导入 sys。
+func (m *Module) Guards() httpx.Guards {
+	return httpx.Guards{Required: m.authentication.Required(), Permit: m.authentication.Permit, Operations: middleware.OperLog(m.auditService), Duplicate: m.duplicate}
+}
+
+// Access 提供与系统授权变更共享的读门禁和权限能力，供 app 手工装配业务模块。
+func (m *Module) Access() interface {
+	Read(func() error) error
+	Allow(security.Principal, string) error
+} {
+	return m.security
+}
+
+// ScopeResolver 提供实时核对持久身份与有效角色的业务范围解析能力。
+func (m *Module) ScopeResolver() security.Resolver { return m.resolver }

@@ -22,7 +22,7 @@ func (r repository) seedFind(ctx context.Context, tx *gorm.DB, parent model.ID, 
 	return menu{}, false, err
 }
 
-// Seed 仅补齐 M1—M3 已实现功能的菜单和按钮，不改写已有节点或授权。
+// Seed 仅补齐 M1—M4 已实现功能的菜单和按钮，不改写已有节点或授权。
 func (s *Service) Seed(ctx context.Context, tx *gorm.DB) ([]model.ID, error) {
 	seedNode := func(parent model.ID, in Input) (menu, error) {
 		row, exists, err := s.repo.seedFind(ctx, tx, parent, in)
@@ -73,6 +73,31 @@ func (s *Service) Seed(ctx context.Context, tx *gorm.DB) ([]model.ID, error) {
 		}
 		for _, action := range actions {
 			button, err := seedNode(node.ID, Input{Name: feature.name + "-" + action, Type: 3, Perm: new("sys:" + feature.code + ":" + action)})
+			if err != nil {
+				return nil, err
+			}
+			if !button.DeletedAt.Valid {
+				ids = append(ids, button.ID)
+			}
+		}
+	}
+
+	// 仅补齐已实现的工具权限节点，不重置任何现有角色授权。
+	tools := []struct {
+		module, feature, name string
+		actions               []string
+	}{{"job", "task", "定时任务", []string{"list", "get", "add", "edit", "remove", "run"}}, {"job", "log", "任务日志", []string{"list", "remove"}}, {"gen", "table", "代码生成", []string{"list", "get", "import", "edit", "remove", "preview", "gen"}}}
+	for _, tool := range tools {
+		node, err := seedNode(0, Input{Name: tool.name, Type: 2, Path: new("/" + tool.module + "/" + tool.feature)})
+		if err != nil {
+			return nil, err
+		}
+		if node.DeletedAt.Valid {
+			continue
+		}
+		ids = append(ids, node.ID)
+		for _, action := range tool.actions {
+			button, err := seedNode(node.ID, Input{Name: tool.name + "-" + action, Type: 3, Perm: new(tool.module + ":" + tool.feature + ":" + action)})
 			if err != nil {
 				return nil, err
 			}

@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS job_log;
+DROP TABLE IF EXISTS job_task;
