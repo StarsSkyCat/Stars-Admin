@@ -15,7 +15,7 @@ jobs:
         run: |
           ./scripts/dev.sh lint
           ./scripts/dev.sh build
-          docker compose -p stars-admin-dev -f deployments/compose.yaml run --rm --no-deps dev go build ./...
+          ./scripts/dev.sh build-all
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 40

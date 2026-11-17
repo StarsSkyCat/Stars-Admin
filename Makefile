@@ -4,7 +4,7 @@ COVER_FLAGS = -covermode=atomic -coverpkg=./internal/...,./pkg/...
 
 .PHONY: run build swag lint test test-integration fmt tidy migrate-up migrate-down migrate-status dev-env dev-down seed
 .PHONY: test-cover integration-cover coverage test-migrate check-swag vuln package
-.PHONY: verify-local
+.PHONY: verify-local build-all
 
 swag:
 	swag init -g main.go -d cmd/server,internal --parseInternal --parseDependency --parseDepth 1 --overridesFile .swaggo --exclude .cache,.git,tmp,bin -o docs/swagger --outputTypes go,json,yaml
@@ -12,6 +12,9 @@ swag:
 build: swag
 	mkdir -p bin
 	CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/stars-admin ./cmd/server
+
+build-all: swag
+	go build ./...
 
 # 候选包仅写本地忽略目录，不上传远程、不创建 tag 或发布。
 package: swag

@@ -35,7 +35,7 @@ case "$target" in
         test_compose run --rm --no-deps dev make "$target" "$@"
         ;;
     run) ensure_tools; compose run --rm --no-deps --service-ports dev make run "$@" ;;
-    build|package|swag|check-swag|lint|test|test-cover|coverage|vuln|fmt|tidy|migrate-up|migrate-down|migrate-status|seed)
+    build|build-all|package|swag|check-swag|lint|test|test-cover|coverage|vuln|fmt|tidy|migrate-up|migrate-down|migrate-status|seed)
         ensure_tools
         compose run --rm --no-deps dev make "$target" "$@"
         ;;
