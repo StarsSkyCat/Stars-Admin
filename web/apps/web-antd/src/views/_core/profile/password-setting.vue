@@ -1,63 +1,72 @@
 <script setup lang="ts">
 import type { VbenFormSchema } from '#/adapter/form';
 
-import { computed } from 'vue';
+import { ref } from 'vue';
 
 import { ProfilePasswordSetting, z } from '@vben/common-ui';
 
-import { message } from 'ant-design-vue';
+import { message, Spin } from 'ant-design-vue';
 
-const formSchema = computed((): VbenFormSchema[] => {
-  return [
-    {
-      fieldName: 'oldPassword',
-      label: '旧密码',
-      component: 'VbenInputPassword',
-      componentProps: {
-        placeholder: '请输入旧密码',
-      },
-    },
-    {
-      fieldName: 'newPassword',
-      label: '新密码',
-      component: 'VbenInputPassword',
-      componentProps: {
-        passwordStrength: true,
-        placeholder: '请输入新密码',
-      },
-    },
-    {
-      fieldName: 'confirmPassword',
-      label: '确认密码',
-      component: 'VbenInputPassword',
-      componentProps: {
-        passwordStrength: true,
-        placeholder: '请再次输入新密码',
-      },
-      dependencies: {
-        rules(values) {
-          const { newPassword } = values;
-          return z
-            .string({ error: '请再次输入新密码' })
-            .min(1, { message: '请再次输入新密码' })
-            .refine((value) => value === newPassword, {
-              message: '两次输入的密码不一致',
-            });
-        },
-        triggerFields: ['newPassword'],
-      },
-    },
-  ];
-});
+import { validPassword } from '#/api/core/auth';
+import { errorText } from '#/api/errors';
+import { useAuthStore } from '#/store';
 
-function handleSubmit() {
-  message.success('密码修改成功');
+const auth = useAuthStore();
+const busy = ref(false);
+const formSchema: VbenFormSchema[] = [
+  {
+    component: 'VbenInputPassword',
+    componentProps: { autocomplete: 'current-password' },
+    fieldName: 'oldPassword',
+    label: '当前密码',
+    rules: z.string().min(1, '请输入当前密码'),
+  },
+  {
+    component: 'VbenInputPassword',
+    componentProps: { autocomplete: 'new-password', passwordStrength: true },
+    fieldName: 'newPassword',
+    label: '新密码',
+    rules: z
+      .string()
+      .refine(validPassword, '新密码至少 12 个字符，最多 72 字节'),
+  },
+  {
+    component: 'VbenInputPassword',
+    componentProps: { autocomplete: 'new-password' },
+    dependencies: {
+      rules: (values) =>
+        z
+          .string()
+          .min(1, '请再次输入新密码')
+          .refine(
+            (value) => value === values.newPassword,
+            '两次输入的密码不一致',
+          ),
+      triggerFields: ['newPassword'],
+    },
+    fieldName: 'confirmPassword',
+    label: '确认密码',
+  },
+];
+
+async function submit(values: Record<string, unknown>) {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    await auth.updatePassword({
+      newPassword: String(values.newPassword),
+      oldPassword: String(values.oldPassword),
+    });
+  } catch (error) {
+    message.error(errorText(error));
+  } finally {
+    busy.value = false;
+  }
 }
 </script>
+
 <template>
-  <ProfilePasswordSetting
-    class="w-1/3"
-    :form-schema="formSchema"
-    @submit="handleSubmit"
-  />
+  <Spin :spinning="busy">
+    <ProfilePasswordSetting :form-schema="formSchema" @submit="submit" />
+  </Spin>
 </template>

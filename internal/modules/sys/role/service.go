@@ -324,23 +324,19 @@ func (s *Service) Grants(ctx context.Context, tx *gorm.DB) ([]permission.Grant, 
 	return out, err
 }
 
-// Permissions 返回指定有效角色的当前权限集合。
-func (s *Service) Permissions(ctx context.Context, tx *gorm.DB, ids []model.ID) ([]string, error) {
-	perms, err := s.menus.Permissions(ctx, tx)
+// MenuIDs 返回给定有效角色关联的菜单及按钮 ID。
+func (s *Service) MenuIDs(ctx context.Context, roleIDs []model.ID) (map[model.ID]bool, error) {
+	out := make(map[model.ID]bool)
+	if len(roleIDs) == 0 {
+		return out, nil
+	}
+	rows, err := s.repo.menus(ctx, nil, roleIDs)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.repo.menus(ctx, tx, ids)
-	if err != nil {
-		return nil, err
-	}
-	out := []string{}
 	for _, row := range rows {
-		if perm := perms[row.MenuID]; perm != "" && !slices.Contains(out, perm) {
-			out = append(out, perm)
-		}
+		out[row.MenuID] = true
 	}
-	slices.Sort(out)
 	return out, nil
 }
 

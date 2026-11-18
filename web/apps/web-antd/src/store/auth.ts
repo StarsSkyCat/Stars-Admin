@@ -1,124 +1,148 @@
-import type { Recordable, UserInfo } from '@vben/types';
+import type { LoginInput, PasswordInput, Profile } from '#/api/core/auth';
 
-import { ref } from 'vue';
+import { onScopeDispose, ref, shallowRef } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { LOGIN_PATH } from '@vben/constants';
 import { preferences } from '@vben/preferences';
-import { resetAllStores, useAccessStore, useUserStore } from '@vben/stores';
+import { useAccessStore, useTabbarStore, useUserStore } from '@vben/stores';
 
-import { notification } from 'ant-design-vue';
+import { message } from 'ant-design-vue';
 import { defineStore } from 'pinia';
 
-import { getAccessCodesApi, getUserInfoApi, loginApi, logoutApi } from '#/api';
-import { $t } from '#/locales';
+import {
+  changePassword,
+  loginApi,
+  logoutApi,
+  profileApi,
+} from '#/api/core/auth';
+import { ApiError } from '#/api/errors';
+import { resetRoutes } from '#/router';
+import { CHANGE_PASSWORD_PATH, HOME_PATH } from '#/router/policy';
+
+import { sessions } from './session';
 
 export const useAuthStore = defineStore('auth', () => {
-  const accessStore = useAccessStore();
-  const userStore = useUserStore();
+  const user = useUserStore();
+  const access = useAccessStore();
+  const tabs = useTabbarStore();
   const router = useRouter();
-
+  const current = shallowRef(sessions.read());
+  const profile = shallowRef<null | Profile>(null);
   const loginLoading = ref(false);
+  let pendingProfile: undefined | { id: string; result: Promise<Profile> };
 
-  /**
-   * 异步处理登录操作
-   * Asynchronously handle the login process
-   * @param params 登录表单数据
-   */
-  async function authLogin(
-    params: Recordable<any>,
-    onSuccess?: () => Promise<void> | void,
-  ) {
-    // 异步处理用户登录操作并获取 accessToken
-    let userInfo: null | UserInfo = null;
-    try {
-      loginLoading.value = true;
-      const { accessToken } = await loginApi(params);
+  // 旧模板持久化的 Access 和权限码不参与会话恢复。
+  access.$reset();
 
-      // 如果成功获取到 accessToken
-      if (accessToken) {
-        accessStore.setAccessToken(accessToken);
+  function clearIdentity() {
+    profile.value = null;
+    user.$reset();
+    access.$reset();
+    tabs.$reset();
+    resetRoutes();
+  }
 
-        // 获取用户信息并存储到 accessStore 中
-        const [fetchUserInfoResult, accessCodes] = await Promise.all([
-          fetchUserInfo(),
-          getAccessCodesApi(),
-        ]);
+  const unsubscribe = sessions.subscribe((next) => {
+    const previous = current.value;
+    current.value = next;
+    const changed = previous?.id !== next?.id;
+    const restricted =
+      !previous?.mustChangePassword && next?.mustChangePassword;
+    if (changed || restricted) clearIdentity();
+    const route = router.currentRoute.value;
+    if (!route.name) return;
+    if (!next && changed && route.path !== LOGIN_PATH) {
+      void router.replace(LOGIN_PATH);
+    } else if (next?.mustChangePassword && (changed || restricted)) {
+      void router.replace(CHANGE_PASSWORD_PATH);
+    } else if (next && changed) {
+      void router.replace(HOME_PATH);
+    }
+  });
+  onScopeDispose(unsubscribe);
 
-        userInfo = fetchUserInfoResult;
+  async function fetchProfile() {
+    const session = sessions.read();
+    if (!session) throw new ApiError('会话已失效，请重新登录', 401, 2000);
+    if (pendingProfile?.id === session.id) return pendingProfile.result;
 
-        userStore.setUserInfo(userInfo);
-        accessStore.setAccessCodes(accessCodes);
-
-        if (accessStore.loginExpired) {
-          accessStore.setLoginExpired(false);
-        } else {
-          onSuccess
-            ? await onSuccess?.()
-            : await router.push(
-                userInfo.homePath || preferences.app.defaultHomePath,
-              );
-        }
-
-        if (userInfo?.realName) {
-          notification.success({
-            description: `${$t('authentication.loginSuccessDesc')}:${userInfo?.realName}`,
-            duration: 3,
-            message: $t('authentication.loginSuccess'),
-          });
-        }
+    const result = (async () => {
+      const data = await profileApi();
+      if (sessions.read()?.id !== session.id) {
+        throw new ApiError('会话已失效，请重新登录', 401, 2000);
       }
+      if (data.mustChangePassword)
+        await sessions.requirePasswordChange(session.id);
+      if (sessions.read()?.id !== session.id) {
+        throw new ApiError('会话已失效，请重新登录', 401, 2000);
+      }
+      profile.value = data;
+      access.setAccessCodes(data.permissions);
+      user.setUserInfo({
+        avatar: preferences.app.defaultAvatar,
+        realName: data.nickname || data.username,
+        userId: data.id,
+        username: data.username,
+      });
+      return data;
+    })();
+    pendingProfile = { id: session.id, result };
+    try {
+      return await result;
+    } finally {
+      if (pendingProfile?.result === result) pendingProfile = undefined;
+    }
+  }
+
+  async function authLogin(input: LoginInput) {
+    if (loginLoading.value) return;
+    loginLoading.value = true;
+    try {
+      const tokens = await loginApi(input);
+      const id = Array.from(
+        crypto.getRandomValues(new Uint8Array(16)),
+        (byte) => byte.toString(16).padStart(2, '0'),
+      ).join('');
+      await sessions.start({ ...tokens, id });
+      await router.replace(
+        tokens.mustChangePassword ? CHANGE_PASSWORD_PATH : HOME_PATH,
+      );
     } finally {
       loginLoading.value = false;
     }
-
-    return {
-      userInfo,
-    };
   }
 
-  async function logout(redirect: boolean = true) {
-    try {
-      await logoutApi();
-    } catch {
-      // 不做任何处理
+  async function logout() {
+    const session = sessions.read();
+    if (!session) {
+      await router.replace(LOGIN_PATH);
+      return;
     }
-    resetAllStores();
-    accessStore.setLoginExpired(false);
-
-    // 已经在登录页时不能再带 redirect：此时 currentRoute.fullPath 就是登录页本身，
-    // 再编码一层会得到「登录页?redirect=编码后的登录页」，下一次又在这个基础上再包一层，
-    // 反复登出会让 URL 逐跳变长，且没有上限。
-    // On the login page the current route is the login page itself, so carrying it as
-    // `redirect` would nest one more encoded layer on every repeat.
-    const currentRoute = router.currentRoute.value;
-    const alreadyOnLogin = currentRoute.path === LOGIN_PATH;
-
-    // 回登录页带上当前路由地址
-    await router.replace({
-      path: LOGIN_PATH,
-      query:
-        redirect && !alreadyOnLogin
-          ? { redirect: encodeURIComponent(currentRoute.fullPath) }
-          : {},
-    });
+    const ended = await sessions.clear(session.id);
+    if (!ended) return;
+    try {
+      await logoutApi(ended.accessToken);
+    } catch {
+      message.warning('本地已退出，暂无法确认服务端会话已撤销');
+    }
   }
 
-  async function fetchUserInfo() {
-    const userInfo = await getUserInfoApi();
-    userStore.setUserInfo(userInfo);
-    return userInfo;
-  }
-
-  function $reset() {
-    loginLoading.value = false;
+  async function updatePassword(input: PasswordInput) {
+    const session = sessions.read();
+    if (!session) return;
+    await changePassword(input);
+    await sessions.clear(session.id);
+    message.success('密码已修改，请重新登录');
   }
 
   return {
-    $reset,
     authLogin,
-    fetchUserInfo,
+    current,
+    fetchProfile,
     loginLoading,
     logout,
+    profile,
+    updatePassword,
   };
 });

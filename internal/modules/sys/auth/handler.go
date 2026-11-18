@@ -140,8 +140,8 @@ func (h *Handler) Logout(c *gin.Context) {
 	response.OK(c, response.Status{Status: "ok"})
 }
 
-// Profile 返回本人当前权限。
-// @Summary 获取本人信息及权限
+// Profile 返回本人资料、导航菜单及操作权限。
+// @Summary 获取本人信息、菜单及权限
 // @Tags 认证
 // @Security BearerAuth
 // @Produce json

@@ -2,7 +2,7 @@
 
 Stars-Admin 是基于 Go、Gin、GORM、PostgreSQL 和 Redis 的模块化中后台后端框架，提供认证授权、系统管理、定时任务和代码生成能力，可作为业务后台的开发基础。
 
-Stars-Admin 在同一个仓库中维护 Go 后端和 `web/` 下的 Vben Admin 前端。后端支持 PostgreSQL，应用、任务调度和授权同步按单实例设计。前端保留 Ant Design Vue 和 Element Plus 两个应用，真实 API 适配待完成，开发与接入步骤见本地 `docs/`。
+Stars-Admin 在同一个仓库中维护 Go 后端和 `web/` 下的 Vben Admin 前端。后端支持 PostgreSQL，应用、任务调度和授权同步按单实例设计。Ant Design Vue 应用已接入登录、改密、个人中心、用户与部门管理，可在 `web/` 运行 `pnpm dev:antd`，默认访问 `http://localhost:5666`。本地 `docs/` 提供开发与接入说明。
 
 ## 功能
 
@@ -39,20 +39,13 @@ git switch dev
 # 启动开发 PostgreSQL 和 Redis，仅绑定宿主 127.0.0.1。
 ./scripts/dev.sh dev-env
 
-# 执行数据库迁移。
-./scripts/dev.sh migrate-up
-
-# 在当前 Bash 中安全读取初始密码，避免写入命令历史。
-read -r -s -p '初始 admin 密码：' STARS_SEED_ADMIN_PASSWORD; printf '\n'
-export STARS_SEED_ADMIN_PASSWORD
-./scripts/dev.sh seed
-unset STARS_SEED_ADMIN_PASSWORD
-
-# 启动 API，使用 Air 热重载；Ctrl+C 停止。
+# 启动开发 API，自动执行 SQL 迁移，使用 Air 热重载。
 ./scripts/dev.sh run
 ```
 
-初始账号为 `admin`。首次 seed 密码至少 12 个字符、最多 72 字节；重复 seed 可省略初始密码，不会重置已有密码、状态或授权。服务启动不会自动执行迁移或 seed。
+本地开发首次登录使用 `admin` / `123456`，按页面提示填写验证码并修改初始密码。也可在首次初始化前通过 `STARS_SEED_ADMIN_PASSWORD` 提供自定义初始密码，至少 12 个字符、最多 72 字节。重复初始化保留已有密码、状态和授权。
+
+只准备开发库时，可执行 `./scripts/dev.sh migrate-up`。初始管理员、菜单与基础配置由 [数据迁移](./migrations/000006_data.up.sql) 写入。
 
 开发端口默认 HTTP `8080`、PostgreSQL `5432`、Redis `6379`；可通过 `STARS_HTTP_PORT`、`STARS_PG_PORT`、`STARS_REDIS_PORT` 调整宿主映射。`./scripts/dev.sh dev-down` 停止开发基础服务并保留数据卷。
 
@@ -60,15 +53,14 @@ unset STARS_SEED_ADMIN_PASSWORD
 
 先看启动终端，确认出现 `HTTP 服务已启动`。Air 的 `running...` 只表示尝试启动子进程；如果随后出现 `Process Exit with Code: 1`，后端已经退出，容器仍可能占着8080，浏览器因此收到空响应。
 
-若日志提示“迁移未就绪：当前版本……期望版本……”，先用Ctrl+C停止这次启动，再执行：
+若启动失败，先用 Ctrl+C 停止这次启动并执行 `./scripts/dev.sh migrate-status` 核对版本。开发库为空或版本落后时，可单独执行初始化再启动：
 
 ```sh
-./scripts/dev.sh migrate-status
 ./scripts/dev.sh migrate-up
 ./scripts/dev.sh run
 ```
 
-更新代码后也需检查是否有新增迁移。`run` 不自动升级数据库或初始化用户，`dev-env` 只启动基础服务；前台运行时请保持终端打开。服务启动后可用 `curl -fsS http://127.0.0.1:8080/api/health/ready` 验证就绪，再打开Swagger。若接口正常而Swagger返回404，检查是否使用了关闭Swagger的环境配置。
+开发环境的 `run` 在监听 HTTP 前完成迁移。`dev-env` 启动 PostgreSQL 和 Redis。前台运行时请保持终端打开。服务启动后可用 `curl -fsS http://127.0.0.1:8080/api/health/ready` 验证就绪，再打开 Swagger。若接口正常而 Swagger 返回 404，检查当前环境的 Swagger 配置。
 
 ## 不使用 Docker 启动
 
@@ -96,6 +88,7 @@ go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 ```sh
 export APP_ENV=dev
+export STARS_APP_ADDR=127.0.0.1:8080
 export STARS_DATABASE_HOST=127.0.0.1
 export STARS_DATABASE_PORT=5432
 export STARS_DATABASE_USERNAME=stars
@@ -105,11 +98,7 @@ export STARS_DATABASE_PASSWORD
 export STARS_REDIS_ADDR=127.0.0.1:6379
 # Redis 启用密码时，额外通过 STARS_REDIS_PASSWORD 提供。
 
-make migrate-up
-read -r -s -p '初始 admin 密码：' STARS_SEED_ADMIN_PASSWORD; printf '\n'
-export STARS_SEED_ADMIN_PASSWORD
-make seed
-unset STARS_SEED_ADMIN_PASSWORD
+# 启动时执行版本化迁移并初始化基础数据。
 make run
 ```
 
@@ -201,7 +190,9 @@ CI 定义 lint/test/migrate/swag/vuln 五个 job，并保存覆盖率与 Swagger
 
 加载顺序为基础 YAML → `APP_ENV` 对应环境 YAML → `STARS_` 环境变量。`APP_ENV` 仅允许 dev/test/prod；例如 `database.host` 对应 `STARS_DATABASE_HOST`，列表变量使用逗号分隔。`STARS_CONFIG_DIR` 可更改配置目录，空环境变量也会覆盖默认值。命令不会自动读取 `.env`。
 
-所有环境都关闭 AutoMigrate。先执行版本化迁移再启动服务；dirty、未升级或超前版本均拒绝启动。CLI 支持 `serve`、`migrate up|down|status`、`seed`；迁移/seed 不依赖 Redis 或已启动的 HTTP 服务。`migrate down` 默认只回退一版，会删除该版结构及数据。
+所有环境都关闭 GORM AutoMigrate，服务启动时检查正式迁移版本。空库依次应用结构基线和数据迁移，已在第 5 版的库只执行数据迁移。第 1—4 版的库先用包含旧迁移的版本升级到第 5 版，例如提交 `b4f8e3e`。[000005_schema](./migrations/000005_schema.up.sql) · [000006_data](./migrations/000006_data.up.sql)
+
+开发环境的 `serve` 自动执行 `migrate up`，生产环境由部署流程显式执行。迁移无需 Redis。`migrate down` 每次回退一版。从第 6 版回退时保留现有数据，从第 5 版回退会删除业务表及数据。
 
 ## 生产部署
 
@@ -229,9 +220,8 @@ docker build -f deployments/Dockerfile -t stars-admin:local .
 ```sh
 docker compose -p stars-admin-prod -f deployments/compose.prod.yaml config --quiet
 # 先停止旧实例、备份数据库和上传目录，并在隔离环境确认备份可恢复。
-docker compose -p stars-admin-prod -f deployments/compose.prod.yaml run --rm --no-deps api migrate up
-# 首次 seed 时单独提供 STARS_SEED_ADMIN_PASSWORD。
-docker compose -p stars-admin-prod -f deployments/compose.prod.yaml run --rm --no-deps api seed
+# 首次创建管理员前，在当前环境注入并导出 STARS_SEED_ADMIN_PASSWORD。
+docker compose -p stars-admin-prod -f deployments/compose.prod.yaml run --rm --no-deps -e STARS_SEED_ADMIN_PASSWORD api migrate up
 unset STARS_SEED_ADMIN_PASSWORD
 docker compose -p stars-admin-prod -f deployments/compose.prod.yaml up -d --wait api
 ```

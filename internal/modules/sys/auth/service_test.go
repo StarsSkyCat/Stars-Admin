@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/model"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/permission"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/response"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
 )
@@ -21,9 +22,6 @@ func (u *fakeUsers) ByUsername(context.Context, string) (security.Account, error
 func (u *fakeUsers) Account(context.Context, model.ID) (security.Account, error) {
 	return u.account, nil
 }
-func (*fakeUsers) Permissions(context.Context, []model.ID) ([]string, error) {
-	return []string{"sys:user:list"}, nil
-}
 func (u *fakeUsers) ChangePassword(_ context.Context, p security.Principal, old, password string) error {
 	u.changed = p.ID == 2 && old == "old-password" && password == "new-password-123"
 	return nil
@@ -31,16 +29,21 @@ func (u *fakeUsers) ChangePassword(_ context.Context, p security.Principal, old,
 func (*fakeUsers) RecordLogin(context.Context, model.ID, string) error { return nil }
 
 type openGate struct{}
+type fakeNavigation struct{}
+
+func (fakeNavigation) Access(context.Context, security.Principal) ([]permission.Menu, []string, error) {
+	return []permission.Menu{{ID: 3}}, []string{"sys:user:list"}, nil
+}
 
 func (openGate) Read(fn func() error) error             { return fn() }
 func (openGate) Allow(security.Principal, string) error { return nil }
 
 func TestProfileAndManagementGate(t *testing.T) {
 	users := &fakeUsers{account: security.Account{Principal: security.Principal{ID: 2, Username: "alice", AuthVersion: 1, RoleIDs: []model.ID{3}}, Nickname: "测试", Status: 1}}
-	s := &Service{users: users, gate: openGate{}}
+	s := &Service{users: users, navigation: fakeNavigation{}, gate: openGate{}}
 	p := users.account.Principal
 	profile, err := s.Profile(t.Context(), p)
-	if err != nil || profile.ID != 2 || len(profile.Permissions) != 1 {
+	if err != nil || profile.ID != 2 || len(profile.Permissions) != 1 || len(profile.Menus) != 1 {
 		t.Fatal("本人权限资料不正确")
 	}
 	if err := s.Permit(t.Context(), p, "sys:user:list"); err != nil {
@@ -50,6 +53,10 @@ func TestProfileAndManagementGate(t *testing.T) {
 		t.Fatal("全局角色资源仍须保留管理门禁")
 	}
 	users.account.MustChangePassword = true
+	profile, err = s.Profile(t.Context(), p)
+	if err != nil || profile.Menus == nil || profile.Permissions == nil || len(profile.Menus) != 0 || len(profile.Permissions) != 0 {
+		t.Fatal("首登资料只能返回空导航和权限集合")
+	}
 	if err := s.Permit(t.Context(), p, "sys:user:list"); !errors.Is(err, response.ErrPasswordChange) {
 		t.Fatal("首登约束未生效")
 	}

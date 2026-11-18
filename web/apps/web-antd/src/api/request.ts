@@ -1,113 +1,153 @@
-/**
- * 该文件可自行根据业务逻辑进行调整
- */
-import type { RequestClientOptions } from '@vben/request';
+import type { HttpResponse } from './errors';
+
+import type { Tokens } from '#/api/core/auth';
 
 import { useAppConfig } from '@vben/hooks';
-import { preferences } from '@vben/preferences';
-import {
-  authenticateResponseInterceptor,
-  defaultResponseInterceptor,
-  errorMessageResponseInterceptor,
-  RequestClient,
-} from '@vben/request';
-import { useAccessStore } from '@vben/stores';
+import { RequestClient } from '@vben/request';
 
-import { message } from 'ant-design-vue';
+import { sessions } from '#/store/session';
 
-import { useAuthStore } from '#/store';
+import { ApiError, readDownload, responseError } from './errors';
 
-import { refreshTokenApi } from './core';
-
-const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
-
-function createRequestClient(baseURL: string, options?: RequestClientOptions) {
-  const client = new RequestClient({
-    ...options,
-    baseURL,
-  });
-
-  /**
-   * 重新认证逻辑
-   */
-  async function doReAuthenticate() {
-    console.warn('Access token or refresh token is invalid or expired. ');
-    const accessStore = useAccessStore();
-    const authStore = useAuthStore();
-    accessStore.setAccessToken(null);
-    if (
-      preferences.app.loginExpiredMode === 'modal' &&
-      accessStore.isAccessChecked
-    ) {
-      accessStore.setLoginExpired(true);
-    } else {
-      await authStore.logout();
-    }
-  }
-
-  /**
-   * 刷新token逻辑
-   */
-  async function doRefreshToken() {
-    const accessStore = useAccessStore();
-    const resp = await refreshTokenApi();
-    const newToken = resp.data;
-    accessStore.setAccessToken(newToken);
-    return newToken;
-  }
-
-  function formatToken(token: null | string) {
-    return token ? `Bearer ${token}` : null;
-  }
-
-  // 请求头处理
-  client.addRequestInterceptor({
-    fulfilled: async (config) => {
-      const accessStore = useAccessStore();
-
-      config.headers.Authorization = formatToken(accessStore.accessToken);
-      config.headers['Accept-Language'] = preferences.app.locale;
-      return config;
-    },
-  });
-
-  // 处理返回的响应数据格式
-  client.addResponseInterceptor(
-    defaultResponseInterceptor({
-      codeField: 'code',
-      dataField: 'data',
-      successCode: 0,
-    }),
-  );
-
-  // token过期的处理
-  client.addResponseInterceptor(
-    authenticateResponseInterceptor({
-      client,
-      doReAuthenticate,
-      doRefreshToken,
-      enableRefreshToken: preferences.app.enableRefreshToken,
-      formatToken,
-    }),
-  );
-
-  // 通用的错误处理,如果没有进入上面的错误处理逻辑，就会进入这里
-  client.addResponseInterceptor(
-    errorMessageResponseInterceptor((msg: string, error) => {
-      // 这里可以根据业务进行定制,你可以拿到 error 内的信息进行定制化处理，根据不同的 code 做不同的提示，而不是直接使用 message.error 提示 msg
-      // 当前mock接口返回的错误字段是 error 或者 message
-      const responseData = error?.response?.data ?? {};
-      const errorMessage = responseData?.error ?? responseData?.message ?? '';
-      // 如果没有错误信息，则会根据状态码进行提示
-      message.error(errorMessage || msg);
-    }),
-  );
-
-  return client;
+interface Envelope<T> {
+  code: number;
+  data: T;
+  msg: string;
 }
 
-export const requestClient = createRequestClient(apiURL, {
-  responseReturn: 'data',
+interface Options {
+  data?: unknown;
+  method?: 'DELETE' | 'GET' | 'POST' | 'PUT';
+  params?: object;
+  personal?: boolean;
+  signal?: AbortSignal;
+}
+
+const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
+const client = new RequestClient({
+  baseURL: apiURL,
+  validateStatus: () => true,
+  timeout: 15_000,
 });
 
-export const baseRequestClient = new RequestClient({ baseURL: apiURL });
+function expired() {
+  return new ApiError('会话已失效，请重新登录', 401, 2000);
+}
+
+async function send<T>(
+  url: string,
+  options: Options,
+  token?: string,
+  download = false,
+) {
+  const headers = {
+    'Content-Type': options.data instanceof FormData ? false : undefined,
+    Authorization: token ? `Bearer ${token}` : undefined,
+  };
+  try {
+    return await client.request<HttpResponse<T>>(url, {
+      data: options.data,
+      headers,
+      method: options.method ?? 'GET',
+      params: options.params,
+      responseType: download ? 'blob' : 'json',
+      signal: options.signal,
+    });
+  } catch {
+    if (options.signal?.aborted)
+      throw new DOMException('请求已取消', 'AbortError');
+    throw new ApiError('无法连接服务，请检查网络后重试');
+  }
+}
+
+async function json<T>(response: HttpResponse<Envelope<T>>) {
+  if (response.status === 200 && response.data?.code === 0)
+    return response.data.data;
+  throw await responseError(response);
+}
+
+export async function publicRequest<T>(
+  url: string,
+  options: Options = {},
+  token?: string,
+) {
+  return json(await send<Envelope<T>>(url, options, token));
+}
+
+export function createProtectedRequest(
+  manager: typeof sessions,
+  transport: typeof send,
+  refresh: (token: string) => Promise<Tokens>,
+) {
+  return async function protectedRequest<T, Result>(
+    url: string,
+    options: Options,
+    parse: (response: HttpResponse<T>) => Promise<Result>,
+    download = false,
+  ) {
+    let session = manager.read();
+    if (!session) throw expired();
+    if (session.mustChangePassword && !options.personal) {
+      throw new ApiError('请先修改密码', 403, 2008);
+    }
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      options.signal?.throwIfAborted();
+      const response = await transport<T>(
+        url,
+        options,
+        session.accessToken,
+        download,
+      );
+      if (manager.read()?.id !== session.id) throw expired();
+      try {
+        const result = await parse(response);
+        const current = manager.read();
+        if (current?.id !== session.id) throw expired();
+        if (current.mustChangePassword && !options.personal) {
+          throw new ApiError('请先修改密码', 403, 2008);
+        }
+        return result;
+      } catch (error) {
+        if (!(error instanceof ApiError)) throw error;
+        if (error.code === 2008) {
+          await manager.requirePasswordChange(session.id);
+        } else if (error.status === 401) {
+          if (error.code === 2001 && attempt === 0) {
+            const next = await manager.rotate(session, refresh);
+            if (!next) throw expired();
+            if (next.mustChangePassword && !options.personal) {
+              throw new ApiError('请先修改密码', 403, 2008);
+            }
+            session = next;
+            continue;
+          }
+          if (
+            error.code === 2000 ||
+            error.code === 2001 ||
+            error.code === 2007
+          ) {
+            await manager.clear(session.id, session.accessToken);
+          }
+        }
+        throw error;
+      }
+    }
+    throw expired();
+  };
+}
+
+const authenticated = createProtectedRequest(sessions, send, (refreshToken) =>
+  publicRequest('/sys/auth/refresh', {
+    data: { refreshToken },
+    method: 'POST',
+  }),
+);
+
+export function request<T>(url: string, options: Options = {}) {
+  return authenticated<Envelope<T>, T>(url, options, json);
+}
+
+export function download(url: string, options: Options) {
+  return authenticated(url, options, readDownload, true);
+}

@@ -2,7 +2,7 @@ GO_FILES = $$(find cmd internal pkg migrations configs -name '*.go' -type f)
 COVER_DIR = .cache/coverage
 COVER_FLAGS = -covermode=atomic -coverpkg=./internal/...,./pkg/...
 
-.PHONY: run build swag lint test test-integration fmt tidy migrate-up migrate-down migrate-status dev-env dev-down seed
+.PHONY: run build swag lint test test-integration fmt tidy migrate-up migrate-down migrate-status dev-env dev-down
 .PHONY: test-cover integration-cover coverage test-migrate check-swag vuln package
 .PHONY: verify-local build-all
 
@@ -85,9 +85,6 @@ migrate-down: build
 
 migrate-status: build
 	./bin/stars-admin migrate status
-
-seed: build
-	./bin/stars-admin seed
 
 dev-env:
 	./scripts/dev.sh dev-env

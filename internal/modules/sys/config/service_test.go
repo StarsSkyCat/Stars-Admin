@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	coreconfig "github.com/StarsSkyCat/Stars-Admin/internal/core/config"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/database"
 	"github.com/StarsSkyCat/Stars-Admin/internal/testutil"
-	"gorm.io/gorm"
 )
 
 func TestSettingsDefaultsAndStrictTypes(t *testing.T) {
@@ -25,7 +25,10 @@ func TestSettingsDefaultsAndStrictTypes(t *testing.T) {
 	if err != nil || !settings.CaptchaEnabled || !settings.MultiLogin || settings.MaxSessions != 5 || settings.PasswordRetryLimit != 5 || settings.LockMinutes != 10 {
 		t.Fatal("缺失参数的安全默认值错误")
 	}
-	if err := deps.DB.WithContext(t.Context()).Transaction(func(tx *gorm.DB) error { return service.Seed(t.Context(), tx, deps.IDs) }); err != nil {
+	if err := database.Migrate(t.Context(), cfg, "down", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Migrate(t.Context(), cfg, "up", ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, test := range []struct{ key, value string }{{keys[0], "yes"}, {keys[2], "0"}, {keys[3], "101"}, {keys[4], "abc"}} {

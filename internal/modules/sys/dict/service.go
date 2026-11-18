@@ -1,3 +1,4 @@
+// Package dict 提供字典类型、数据和缓存。
 package dict
 
 import (
@@ -12,6 +13,8 @@ import (
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
 	"gorm.io/gorm"
 )
+
+type idSource interface{ Next() (int64, error) }
 
 // Service 管理类型、数据和普通缓存。
 type Service struct {

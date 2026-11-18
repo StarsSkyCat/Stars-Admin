@@ -33,8 +33,6 @@ services:
       STARS_FILE_LOCAL_DIR: /app/uploads
       STARS_SWAGGER_ENABLED: "false"
       STARS_GEN_LOCAL_ENABLED: "false"
-      # 只在显式 seed 的一次性容器中提供，常驻服务应保持为空。
-      STARS_SEED_ADMIN_PASSWORD: ${STARS_SEED_ADMIN_PASSWORD:-}
     volumes:
       - ${STARS_UPLOADS_DIR:?必须提供可写文件目录}:/app/uploads
       - ${STARS_LOGS_DIR:?必须提供可写日志目录}:/app/logs

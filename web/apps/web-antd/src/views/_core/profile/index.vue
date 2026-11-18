@@ -4,46 +4,41 @@ import { ref } from 'vue';
 import { Profile } from '@vben/common-ui';
 import { useUserStore } from '@vben/stores';
 
-import ProfileBase from './base-setting.vue';
-import ProfileNotificationSetting from './notification-setting.vue';
-import ProfilePasswordSetting from './password-setting.vue';
-import ProfileSecuritySetting from './security-setting.vue';
+import { Descriptions, DescriptionsItem } from 'ant-design-vue';
 
-const userStore = useUserStore();
+import { useAuthStore } from '#/store';
 
-const tabsValue = ref<string>('basic');
+import PasswordSetting from './password-setting.vue';
 
-const tabs = ref([
-  {
-    label: '基本设置',
-    value: 'basic',
-  },
-  {
-    label: '安全设置',
-    value: 'security',
-  },
-  {
-    label: '修改密码',
-    value: 'password',
-  },
-  {
-    label: '新消息提醒',
-    value: 'notice',
-  },
-]);
+const user = useUserStore();
+const auth = useAuthStore();
+const active = ref('basic');
+const tabs = [
+  { label: '基本资料', value: 'basic' },
+  { label: '修改密码', value: 'password' },
+];
 </script>
+
 <template>
   <Profile
-    v-model:model-value="tabsValue"
-    title="个人中心"
-    :user-info="userStore.userInfo"
+    v-model:model-value="active"
     :tabs="tabs"
+    :user-info="user.userInfo"
+    title="个人中心"
   >
     <template #content>
-      <ProfileBase v-if="tabsValue === 'basic'" />
-      <ProfileSecuritySetting v-if="tabsValue === 'security'" />
-      <ProfilePasswordSetting v-if="tabsValue === 'password'" />
-      <ProfileNotificationSetting v-if="tabsValue === 'notice'" />
+      <Descriptions v-if="active === 'basic'" :column="1" bordered>
+        <DescriptionsItem label="用户 ID">
+          {{ auth.profile?.id }}
+        </DescriptionsItem>
+        <DescriptionsItem label="用户名">
+          {{ auth.profile?.username }}
+        </DescriptionsItem>
+        <DescriptionsItem label="昵称">
+          {{ auth.profile?.nickname || '—' }}
+        </DescriptionsItem>
+      </Descriptions>
+      <PasswordSetting v-else class="max-w-lg" />
     </template>
   </Profile>
 </template>

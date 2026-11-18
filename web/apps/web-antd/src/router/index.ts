@@ -4,7 +4,7 @@ import {
   createWebHistory,
 } from 'vue-router';
 
-import { resetStaticRoutes } from '@vben/utils';
+import { cloneDeep, resetStaticRoutes } from '@vben/utils';
 
 import { createRouterGuard } from './guard';
 import { routes } from './routes';
@@ -18,7 +18,7 @@ const router = createRouter({
       ? createWebHashHistory(import.meta.env.VITE_BASE)
       : createWebHistory(import.meta.env.VITE_BASE),
   // 应该添加到路由的初始路由列表。
-  routes,
+  routes: cloneDeep(routes),
   scrollBehavior: (to, _from, savedPosition) => {
     if (savedPosition) {
       return savedPosition;
@@ -29,9 +29,13 @@ const router = createRouter({
   // strict: true,
 });
 
-const resetRoutes = () => resetStaticRoutes(router, routes);
+function resetRoutes() {
+  resetStaticRoutes(router, routes);
+  const root = routes.find((route) => route.name === 'Root');
+  if (root) router.addRoute(cloneDeep(root));
+}
 
 // 创建路由守卫
-createRouterGuard(router);
+createRouterGuard(router, resetRoutes);
 
 export { resetRoutes, router };

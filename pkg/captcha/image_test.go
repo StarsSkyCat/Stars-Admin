@@ -1,7 +1,9 @@
 package captcha
 
 import (
+	"bytes"
 	"encoding/base64"
+	"image/png"
 	"strings"
 	"testing"
 )
@@ -26,5 +28,24 @@ func TestCaptchaImageAndRandomAnswer(t *testing.T) {
 	decoded, err := base64.StdEncoding.DecodeString(data)
 	if err != nil || len(decoded) < 100 || string(decoded[:8]) != "\x89PNG\r\n\x1a\n" {
 		t.Fatal("验证码图片无效")
+	}
+	rendered, err := png.Decode(bytes.NewReader(decoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	darkPixels := 0
+	for y := range rendered.Bounds().Dy() {
+		for x := range rendered.Bounds().Dx() {
+			r, g, b, a := rendered.At(x, y).RGBA()
+			if a != 0xffff {
+				t.Fatal("验证码底色应保持不透明")
+			}
+			if r < 0x4000 && g < 0x4000 && b < 0x4000 {
+				darkPixels++
+			}
+		}
+	}
+	if darkPixels < 200 {
+		t.Fatal("验证码缺少足够的高对比度笔画")
 	}
 }

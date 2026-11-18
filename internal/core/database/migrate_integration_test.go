@@ -8,9 +8,11 @@ import (
 	"time"
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/config"
+	"github.com/StarsSkyCat/Stars-Admin/pkg/hash"
 )
 
 func TestMigrationLifecycleAndConstraints(t *testing.T) {
+	const initialPassword = "Test-Initial-Password-123"
 	cfg, err := config.Load("../../../configs")
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +37,7 @@ func TestMigrationLifecycleAndConstraints(t *testing.T) {
 		t.Fatal(err)
 	}
 	for status.Version > 0 {
-		if err := Migrate(ctx, cfg.Database, "down"); err != nil {
+		if err := Migrate(ctx, cfg, "down", ""); err != nil {
 			t.Fatal(err)
 		}
 		status, err = ReadStatus(ctx, connection.SQL)
@@ -46,30 +48,42 @@ func TestMigrationLifecycleAndConstraints(t *testing.T) {
 	if CheckMigrations(ctx, connection.SQL) == nil {
 		t.Fatal("空数据库不能就绪")
 	}
-	if err := Migrate(ctx, cfg.Database, "up"); err != nil {
+	for _, password := range []string{"", "too-short"} {
+		if err := Migrate(ctx, cfg, "up", password); err == nil {
+			t.Fatal("非开发环境首次迁移不能接受缺失或弱密码")
+		}
+		status, err := ReadStatus(ctx, connection.SQL)
+		if err != nil || status.Version != 0 || status.Dirty {
+			t.Fatalf("密码校验失败时应保留空库：%+v，%v", status, err)
+		}
+	}
+	if err := Migrate(ctx, cfg, "up", initialPassword); err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckMigrations(ctx, connection.SQL); err != nil {
 		t.Fatal(err)
 	}
-	// 独立 CI job 从空库开始，仍必须实际逐版回退，不能依赖其他包先迁移。
-	latest, err := LatestVersion()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for version := latest; version > 0; version-- {
-		if err := Migrate(ctx, cfg.Database, "down"); err != nil {
+	// 从数据版回退只回退版本记录，回退结构基线会清空业务表。
+	for _, expected := range []int64{schemaBaselineVersion, 0} {
+		if err := Migrate(ctx, cfg, "down", ""); err != nil {
 			t.Fatal(err)
 		}
 		status, err := ReadStatus(ctx, connection.SQL)
-		if err != nil || status.Version != int64(version-1) || status.Dirty {
+		if err != nil || status.Version != expected || status.Dirty {
 			t.Fatalf("逐版回退状态错误：%+v，%v", status, err)
 		}
 	}
-	if err := Migrate(ctx, cfg.Database, "up"); err != nil {
+	if err := Migrate(ctx, cfg, "up", initialPassword); err != nil {
 		t.Fatal(err)
 	}
 	var count int
+	var encoded string
+	if err := connection.SQL.QueryRowContext(ctx, "SELECT password FROM sys_user WHERE id=1 AND pwd_updated_at IS NULL").Scan(&encoded); err != nil || !hash.Match(encoded, initialPassword) {
+		t.Fatalf("未创建需要首登改密的管理员：%v", err)
+	}
+	if err := connection.SQL.QueryRowContext(ctx, "SELECT count(*) FROM sys_role_menu WHERE role_id=1").Scan(&count); err != nil || count != 81 {
+		t.Fatalf("管理员菜单授权数量错误：%d，%v", count, err)
+	}
 	if err := connection.SQL.QueryRowContext(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name LIKE 'sys_%'").Scan(&count); err != nil || count != 16 {
 		t.Fatalf("系统表数量错误：%d，%v", count, err)
 	}
@@ -114,7 +128,7 @@ func TestMigrationLifecycleAndConstraints(t *testing.T) {
 	for _, state := range []struct {
 		version int
 		dirty   bool
-	}{{1, true}, {-1, true}, {6, false}} {
+	}{{1, true}, {-1, true}, {initialDataVersion + 1, false}} {
 		if _, err := connection.SQL.ExecContext(ctx, "UPDATE public.schema_migrations SET version=$1, dirty=$2", state.version, state.dirty); err != nil {
 			t.Fatal(err)
 		}
@@ -126,19 +140,32 @@ func TestMigrationLifecycleAndConstraints(t *testing.T) {
 			t.Fatal("脏版本或超前结构未拒绝")
 		}
 	}
-	if _, err := connection.SQL.ExecContext(ctx, "UPDATE public.schema_migrations SET version=5, dirty=false"); err != nil {
+	if _, err := connection.SQL.ExecContext(ctx, "UPDATE public.schema_migrations SET version=4, dirty=false"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(ctx, cfg.Database, "down"); err != nil {
+	if err := Migrate(ctx, cfg, "up", initialPassword); err == nil {
+		t.Fatal("低于结构基线的旧库应由旧版本继续升级")
+	}
+	status, err = ReadStatus(ctx, connection.SQL)
+	if err != nil || status.Version != 4 || status.Dirty {
+		t.Fatalf("旧库版本记录被修改：%+v，%v", status, err)
+	}
+	if _, err := connection.SQL.ExecContext(ctx, "UPDATE public.schema_migrations SET version=$1, dirty=false", initialDataVersion); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, cfg, "down", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckMigrations(ctx, connection.SQL); err == nil {
 		t.Fatal("回退后不能就绪")
 	}
-	if err := Migrate(ctx, cfg.Database, "up"); err != nil {
+	if err := Migrate(ctx, cfg, "up", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := CheckMigrations(ctx, connection.SQL); err != nil {
 		t.Fatal(err)
+	}
+	if err := connection.SQL.QueryRowContext(ctx, "SELECT count(*) FROM sys_user WHERE id IN (1, 11)").Scan(&count); err != nil || count != 2 {
+		t.Fatalf("基础数据回退和重跑应保留已有账号：%d，%v", count, err)
 	}
 }

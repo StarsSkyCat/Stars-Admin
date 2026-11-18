@@ -23,7 +23,7 @@ func Open(t *testing.T, cfg *config.Config) core.Deps {
 	}
 	cfg.Redis.KeyPrefix = "stars:test:" + uuid.New().String() + ":"
 	cfg.Auth.BcryptCost = 4
-	if err := database.Migrate(t.Context(), cfg.Database, "up"); err != nil {
+	if err := database.Migrate(t.Context(), cfg, "up", "Integration-Initial-Password"); err != nil {
 		t.Fatal(err)
 	}
 	db, err := database.Open(t.Context(), cfg.Database)

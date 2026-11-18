@@ -10,10 +10,16 @@ import (
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/config"
 	"github.com/StarsSkyCat/Stars-Admin/migrations"
+	"github.com/StarsSkyCat/Stars-Admin/pkg/hash"
 	"github.com/golang-migrate/migrate/v4"
+	migratedb "github.com/golang-migrate/migrate/v4/database"
 	migratepg "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"golang.org/x/crypto/bcrypt"
 )
+
+const schemaBaselineVersion = 5
+const initialDataVersion = 6
 
 // MigrationStatus 只用于 CLI 和内部就绪判定。
 type MigrationStatus struct {
@@ -47,7 +53,9 @@ func LatestVersion() (uint, error) {
 }
 
 // ReadStatus 查询版本，不创建迁移表、不改变数据库结构。
-func ReadStatus(ctx context.Context, db *sql.DB) (MigrationStatus, error) {
+func ReadStatus(ctx context.Context, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (MigrationStatus, error) {
 	expected, err := LatestVersion()
 	if err != nil {
 		return MigrationStatus{}, err
@@ -82,18 +90,38 @@ func CheckMigrations(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// Migrate 使用独立连接执行显式的升级或单版回退，不依赖 Redis。
-func Migrate(ctx context.Context, c config.Database, direction string) (err error) {
+// Migrate 使用独立连接执行升级或单版回退。initialPassword 只用于首次数据迁移。
+func Migrate(ctx context.Context, cfg *config.Config, direction, initialPassword string) (err error) {
 	if direction != "up" && direction != "down" {
 		return errors.New("迁移动作只能是 up 或 down")
 	}
+	c := cfg.Database
 	connection, err := Open(ctx, c)
 	if err != nil {
 		return err
 	}
-	driver, err := migratepg.WithInstance(connection.SQL, &migratepg.Config{DatabaseName: c.DBName, SchemaName: "public", StatementTimeout: c.Timeout})
+	defer func() { err = errors.Join(err, connection.Close()) }()
+	setupCtx, cancel := context.WithTimeout(ctx, c.Timeout)
+	defer cancel()
+	conn, err := connection.SQL.Conn(setupCtx)
 	if err != nil {
-		_ = connection.Close()
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	status, err := ReadStatus(setupCtx, conn)
+	if err != nil {
+		return err
+	}
+	if status.Version > 0 && status.Version < schemaBaselineVersion {
+		return fmt.Errorf("旧迁移版本 %d，dirty=%t；请用包含原迁移的版本升级至 %d", status.Version, status.Dirty, schemaBaselineVersion)
+	}
+	if direction == "up" && !status.Dirty && status.Version < initialDataVersion {
+		if err := setInitialPassword(setupCtx, conn, status.Version, cfg.App.Env == "dev", initialPassword); err != nil {
+			return err
+		}
+	}
+	driver, err := migratepg.WithConnection(setupCtx, conn, &migratepg.Config{DatabaseName: c.DBName, SchemaName: "public", StatementTimeout: c.Timeout})
+	if err != nil {
 		return fmt.Errorf("初始化迁移驱动失败: %w", err)
 	}
 	source, err := iofs.New(migrations.Files, ".")
@@ -127,5 +155,35 @@ func Migrate(ctx context.Context, c config.Database, direction string) (err erro
 	if errors.Is(err, migrate.ErrNoChange) || errors.Is(err, migrate.ErrNilVersion) {
 		return nil
 	}
+	if failure, ok := errors.AsType[migratedb.Error](err); ok {
+		// 驱动错误包含整段 SQL，输出底层错误以免记录种子哈希。
+		return fmt.Errorf("执行 PostgreSQL 迁移失败: %w", failure.OrigErr)
+	}
+	return err
+}
+
+func setInitialPassword(ctx context.Context, conn *sql.Conn, version int64, development bool, password string) error {
+	if version == schemaBaselineVersion {
+		var exists bool
+		if err := conn.QueryRowContext(ctx, "SELECT EXISTS (SELECT FROM public.sys_user WHERE id = 1 AND username = 'admin')").Scan(&exists); err != nil {
+			return err
+		}
+		if exists {
+			return nil
+		}
+	}
+	var encoded string
+	if password != "" {
+		var err error
+		encoded, err = hash.Password(password, bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("STARS_SEED_ADMIN_PASSWORD 无效: %w", err)
+		}
+	} else if !development {
+		return errors.New("首次数据迁移必须提供 STARS_SEED_ADMIN_PASSWORD")
+	}
+	// 哈希与环境标记仅对本次迁移的专用 PostgreSQL 连接有效。
+	_, err := conn.ExecContext(ctx, `SELECT set_config('stars_admin.initial_password_hash', $1, false),
+		set_config('stars_admin.development', CASE WHEN $2::boolean THEN 'on' ELSE 'off' END, false)`, encoded, development)
 	return err
 }

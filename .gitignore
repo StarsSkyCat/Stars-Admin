@@ -41,6 +41,7 @@
 /web/**/.omx
 /web/**/.pnpm-store
 /web/**/.eslintcache
+/web/**/docs
 
 # 前端本地环境、日志和 Vite 临时文件
 /web/**/*.local

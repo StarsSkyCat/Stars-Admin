@@ -79,13 +79,13 @@ func run() error {
 	if c.base == "" {
 		return errors.New("必须指定隔离服务 STARS_SMOKE_URL")
 	}
-	if len(os.Args) > 1 && os.Args[1] == "after-seed" {
+	if len(os.Args) > 1 && os.Args[1] == "after-migrate" {
 		pair, err := c.login(newPassword)
 		if err != nil {
 			return err
 		}
 		if pair.MustChange {
-			return errors.New("重复 seed 恢复了首登标识")
+			return errors.New("重复迁移恢复了首登标识")
 		}
 		return nil
 	}

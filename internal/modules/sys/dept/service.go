@@ -24,7 +24,6 @@ type departmentStore interface {
 	get(context.Context, *gorm.DB, model.ID) (department, error)
 	save(context.Context, *gorm.DB, *department, bool) error
 	remove(context.Context, *gorm.DB, []model.ID, model.ID) error
-	seedRoot(context.Context, *gorm.DB) (department, bool, error)
 }
 
 // Users 由装配层注入用户业务的引用检查，不读取其他功能的数据表。

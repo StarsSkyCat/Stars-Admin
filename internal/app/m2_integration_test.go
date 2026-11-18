@@ -7,6 +7,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,14 +15,12 @@ import (
 	"time"
 	"uuid"
 
-	"github.com/StarsSkyCat/Stars-Admin/internal/core"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/config"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/database"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/session"
-	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys"
+	sysauth "github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/auth"
 	"github.com/StarsSkyCat/Stars-Admin/pkg/hash"
 	token "github.com/StarsSkyCat/Stars-Admin/pkg/jwt"
-	"github.com/StarsSkyCat/Stars-Admin/pkg/snowflake"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -85,7 +84,7 @@ func seedApp(t *testing.T, options ...func(*config.Config)) *App {
 	for _, option := range options {
 		option(cfg)
 	}
-	if err := database.Migrate(t.Context(), cfg.Database, "up"); err != nil {
+	if err := database.Migrate(t.Context(), cfg, "up", firstPassword); err != nil {
 		t.Fatal(err)
 	}
 	db, err := database.Open(t.Context(), cfg.Database)
@@ -95,11 +94,11 @@ func seedApp(t *testing.T, options ...func(*config.Config)) *App {
 	if err := db.ORM.Exec("TRUNCATE job_log,job_task,gen_table_column,gen_table,sys_post,sys_file,sys_file_cleanup,sys_oper_log,sys_dept,sys_user,sys_role,sys_menu,sys_dict_type,sys_config,sys_login_log,casbin_rule RESTART IDENTITY CASCADE").Error; err != nil {
 		t.Fatal(err)
 	}
-	ids, err := snowflake.New(cfg.ID.Node)
-	if err != nil {
+	// 测试清空基础数据后，重新执行数据迁移准备独立用例。
+	if err := database.Migrate(t.Context(), cfg, "down", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := sys.Seed(t.Context(), core.Deps{Config: cfg, DB: db.ORM, IDs: ids, Logger: zap.NewNop()}, firstPassword); err != nil {
+	if err := database.Migrate(t.Context(), cfg, "up", firstPassword); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.ORM.Exec("UPDATE sys_config SET value='false' WHERE key='sys.account.captchaEnabled'").Error; err != nil {
@@ -168,6 +167,72 @@ func TestM2RoleAndAccountStateRevokeAllSessions(t *testing.T) {
 	requireCode(t, callAPI(t, a, "GET", "/api/sys/users/"+userID, nil, admin.AccessToken), 200, 0)
 }
 
+func TestMenuAccessFollowsRoleGrantsAndTreeState(t *testing.T) {
+	a := seedApp(t)
+	admin := adminLogin(t, a)
+	role := objectID(t, callAPI(t, a, "POST", "/api/sys/roles", map[string]string{"name": "导航验收", "code": "navigation_check"}, admin.AccessToken))
+	var listButtonID string
+	if err := a.db.ORM.Table("sys_menu").Select("id::text").Where("perm = ?", "sys:user:list").Scan(&listButtonID).Error; err != nil || listButtonID == "" {
+		t.Fatalf("未找到用户列表权限种子：%v", err)
+	}
+	grant := func(ids ...string) {
+		t.Helper()
+		requireCode(t, callAPI(t, a, "PUT", "/api/sys/roles/"+role+"/menus", map[string]any{"menuIds": append([]string{}, ids...)}, admin.AccessToken), 200, 0)
+	}
+	grant(listButtonID)
+	_, member := createMember(t, a, admin, "navigation_member", "", role)
+	readProfile := func(token string) sysauth.Profile {
+		t.Helper()
+		reply := callAPI(t, a, "GET", "/api/sys/auth/profile", nil, token)
+		requireCode(t, reply, 200, 0)
+		return reply.As[sysauth.Profile](t)
+	}
+	p := readProfile(member.AccessToken)
+	if len(p.Permissions) != 1 || p.Permissions[0] != "sys:user:list" ||
+		len(p.Menus) != 1 || len(p.Menus[0].Children) != 1 {
+		t.Fatalf("单个按钮授权应保留祖级和所属页面：%+v", p)
+	}
+	group, page := p.Menus[0], p.Menus[0].Children[0]
+	groupURL := "/api/sys/menus/" + strconv.FormatInt(int64(group.ID), 10)
+	pageURL := "/api/sys/menus/" + strconv.FormatInt(int64(page.ID), 10)
+	if page.Type != 2 || page.Path == nil || *page.Path != "/system/users" || len(page.Children) != 0 || !page.Visible {
+		t.Fatalf("导航页元数据错误：%+v", page)
+	}
+	requireCode(t, callAPI(t, a, "GET", "/api/sys/users", nil, member.AccessToken), 200, 0)
+	requireCode(t, callAPI(t, a, "GET", "/api/sys/depts", nil, member.AccessToken), 403, 2004)
+	requireCode(t, callAPI(t, a, "GET", "/api/sys/menus/tree", nil, member.AccessToken), 403, 2004)
+	requireCode(t, callAPI(t, a, "PUT", pageURL, map[string]any{
+		"parentId": group.ID, "type": 2, "name": "隐藏的用户页", "path": page.Path, "component": page.Component, "sort": 12, "visible": 2, "status": 1,
+	}, admin.AccessToken), 200, 0)
+	p = readProfile(member.AccessToken)
+	if len(p.Menus) != 1 || len(p.Menus[0].Children) != 1 ||
+		p.Menus[0].Children[0].Visible || p.Menus[0].Children[0].Name != "隐藏的用户页" ||
+		p.Menus[0].Children[0].Sort != 12 || len(p.Permissions) != 1 {
+		t.Fatalf("隐藏及修改菜单应同步到导航且保留操作权限：%+v", p)
+	}
+	requireCode(t, callAPI(t, a, "PUT", groupURL, map[string]any{
+		"type": 1, "name": group.Name, "path": group.Path, "visible": 1, "status": 2,
+	}, admin.AccessToken), 200, 0)
+	p = readProfile(member.AccessToken)
+	if len(p.Menus) != 0 || len(p.Permissions) != 0 {
+		t.Fatal("停用目录后仍向普通用户下发子菜单或按钮权限")
+	}
+	requireCode(t, callAPI(t, a, "GET", "/api/sys/users", nil, member.AccessToken), 403, 2004)
+	for _, node := range readProfile(admin.AccessToken).Menus {
+		if node.ID == group.ID {
+			t.Fatal("管理员导航也应排除停用目录")
+		}
+	}
+	requireCode(t, callAPI(t, a, "PUT", groupURL, map[string]any{
+		"type": 1, "name": group.Name, "path": group.Path, "visible": 1, "status": 1,
+	}, admin.AccessToken), 200, 0)
+	grant()
+	p = readProfile(member.AccessToken)
+	if len(p.Menus) != 0 || len(p.Permissions) != 0 {
+		t.Fatal("撤销角色授权后导航和按钮权限仍然可用")
+	}
+}
+
 func TestM2ExpiredAccessStillAllowsRefreshWithinOriginalDeadline(t *testing.T) {
 	a := seedApp(t, func(c *config.Config) { c.JWT.AccessTTL = time.Second })
 	pair := loginUser(t, a, "admin", firstPassword)
@@ -213,7 +278,7 @@ func objectID(t *testing.T, r apiReply) string {
 	return out.ID
 }
 
-func TestM2SeedFirstLoginAndAdministrativeCRUD(t *testing.T) {
+func TestM2FirstLoginAndAdministrativeCRUD(t *testing.T) {
 	a := seedApp(t)
 	requireCode(t, callAPI(t, a, "GET", "/api/sys/users", nil, ""), 401, 2000)
 	first := loginUser(t, a, "admin", firstPassword)
@@ -290,17 +355,13 @@ func TestM2SeedFirstLoginAndAdministrativeCRUD(t *testing.T) {
 	requireCode(t, callAPI(t, a, "DELETE", "/api/sys/menus/"+menuID, nil, admin.AccessToken), 200, 0)
 	requireCode(t, callAPI(t, a, "DELETE", "/api/sys/depts/"+childID, nil, admin.AccessToken), 200, 0)
 	requireCode(t, callAPI(t, a, "DELETE", "/api/sys/depts/"+deptID, nil, admin.AccessToken), 200, 0)
-	// 重复 seed 不重置密码、参数或已有授权。
-	ids, err := snowflake.New(0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sys.Seed(t.Context(), core.Deps{Config: a.cfg, DB: a.db.ORM, IDs: ids, Logger: zap.NewNop()}, "Ignored-Password-999"); err != nil {
+	// 已完成的数据迁移不会在常规升级时重置密码。
+	if err := database.Migrate(t.Context(), a.cfg, "up", "Ignored-Password-999"); err != nil {
 		t.Fatal(err)
 	}
 	var encoded string
 	if err := a.db.ORM.Table("sys_user").Select("password").Where("id = ?", 1).Scan(&encoded).Error; err != nil || !hash.Match(encoded, changedPassword) {
-		t.Fatal("seed 重置了密码")
+		t.Fatal("重复迁移重置了密码")
 	}
 }
 

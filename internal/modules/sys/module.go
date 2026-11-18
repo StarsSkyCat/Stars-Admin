@@ -24,7 +24,6 @@ import (
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/menu"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/post"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/role"
-	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/seed"
 	"github.com/StarsSkyCat/Stars-Admin/internal/modules/sys/user"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -60,10 +59,7 @@ type features struct {
 func assemble(deps core.Deps, gate *security.Manager) *features {
 	f := new(features)
 	resolver := scopeResolver{f}
-	var access security.ScopeAccess
-	if gate != nil {
-		access = security.NewScopeAccess(gate, resolver)
-	}
+	access := security.NewScopeAccess(gate, resolver)
 	f.depts = dept.New(deps.DB, deps.IDs, gate, access)
 	f.menus = menu.New(deps.DB, deps.IDs, gate)
 	f.roles = role.New(deps.DB, deps.IDs, gate, f.menus, f.depts)
@@ -141,7 +137,7 @@ func New(ctx context.Context, deps core.Deps) (*Module, error) {
 	}
 	files := file.New(deps.DB, storage, deps.IDs, deps.Config.File, deps.Logger)
 	loginAudit.Configure(sessions, f.users)
-	authentication, err := auth.New(deps.Config, deps.Redis, f.users, settings, loginAudit, gate, sessions, deps.Logger)
+	authentication, err := auth.New(deps.Config, deps.Redis, f.users, f.menus, settings, loginAudit, gate, sessions, deps.Logger)
 	if err != nil {
 		_ = files.Close()
 		return nil, err
@@ -188,22 +184,6 @@ func (m *Module) Ready(ctx context.Context) error { return m.security.Ready(ctx)
 // Close 必须在 HTTP 在途请求排空后、数据库关闭前执行。
 func (m *Module) Close() error {
 	return errors.Join(m.auditService.Close(), m.fileService.Close(), m.security.Close())
-}
-
-// Seed 仅依赖数据库和哈希配置，不连接 Redis、不启动安全重试或 HTTP。
-func Seed(ctx context.Context, deps core.Deps, password string) error {
-	f := assemble(deps, nil)
-	policies, err := permission.New(deps.DB, deps.Config.Database.Timeout)
-	if err != nil {
-		return err
-	}
-	extras := func(ctx context.Context, tx *gorm.DB) error {
-		if err := sysconfig.New(deps.DB).Seed(ctx, tx, deps.IDs); err != nil {
-			return err
-		}
-		return dict.Seed(ctx, tx, deps.IDs)
-	}
-	return seed.Run(ctx, deps.DB, f.depts, f.menus, f.roles, f.users, password, extras, f.project, policies)
 }
 
 func requestTimeout(route string, normal time.Duration) time.Duration {

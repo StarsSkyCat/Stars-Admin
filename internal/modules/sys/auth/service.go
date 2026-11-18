@@ -10,6 +10,7 @@ import (
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/config"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/model"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/permission"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/response"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/session"
@@ -25,9 +26,13 @@ import (
 type Users interface {
 	ByUsername(context.Context, string) (security.Account, error)
 	Account(context.Context, model.ID) (security.Account, error)
-	Permissions(context.Context, []model.ID) ([]string, error)
 	ChangePassword(context.Context, security.Principal, string, string) error
 	RecordLogin(context.Context, model.ID, string) error
+}
+
+// Navigation 提供由有效角色计算的菜单和操作权限。
+type Navigation interface {
+	Access(context.Context, security.Principal) ([]permission.Menu, []string, error)
 }
 
 // Settings 提供已校验的只读认证参数。
@@ -46,25 +51,33 @@ type gate interface {
 
 // Service 持有会话、认证快照与业务规则。
 type Service struct {
-	repo       repository
-	users      Users
-	settings   Settings
-	audit      Audit
-	gate       gate
-	tokens     *token.Manager
-	sessions   *session.Store
-	refreshTTL time.Duration
-	dummyHash  string
-	log        *zap.Logger
+	repo        repository
+	users       Users
+	navigation  Navigation
+	settings    Settings
+	audit       Audit
+	gate        gate
+	tokens      *token.Manager
+	sessions    *session.Store
+	refreshTTL  time.Duration
+	dummyHash   string
+	development bool
+	log         *zap.Logger
 }
 
 // New 构造认证服务，预生成未知账号的等价 bcrypt 比对成本。
-func New(cfg *config.Config, cache *redis.Client, users Users, settings Settings, audit Audit, gate gate, sessions *session.Store, log *zap.Logger) (*Service, error) {
+func New(cfg *config.Config, cache *redis.Client, users Users, navigation Navigation, settings Settings, audit Audit, gate gate, sessions *session.Store, log *zap.Logger) (*Service, error) {
 	dummy, err := hash.Password(uuid.New().String(), cfg.Auth.BcryptCost)
 	if err != nil {
 		return nil, err
 	}
-	return &Service{repository{cache, cfg.Redis.KeyPrefix, cfg.Redis.Timeout}, users, settings, audit, gate, token.New(cfg.JWT.Secret, cfg.JWT.Issuer, cfg.JWT.AccessTTL), sessions, cfg.JWT.RefreshTTL, dummy, log}, nil
+	return &Service{
+		repo:  repository{cache, cfg.Redis.KeyPrefix, cfg.Redis.Timeout},
+		users: users, navigation: navigation, settings: settings, audit: audit, gate: gate,
+		tokens:   token.New(cfg.JWT.Secret, cfg.JWT.Issuer, cfg.JWT.AccessTTL),
+		sessions: sessions, refreshTTL: cfg.JWT.RefreshTTL, dummyHash: dummy,
+		development: cfg.App.Env == "dev", log: log,
+	}, nil
 }
 
 func (s *Service) settingsFor(ctx context.Context) (sysconfig.Settings, error) {
@@ -170,7 +183,9 @@ func (s *Service) Login(ctx context.Context, in LoginInput, ip string, userAgent
 			encoded = account.Password
 		}
 		match := hash.Match(encoded, in.Password)
-		if e != nil || !match {
+		// 只有尚未改密的开发管理员可以使用短初始密码。
+		allowInitialPassword := s.development && account.ID == 1 && account.MustChangePassword
+		if e != nil || !match || (!allowInitialPassword && hash.Validate(in.Password) != nil) {
 			locked, e := s.repo.fail(ctx, in.Username, settings.PasswordRetryLimit, settings.LockMinutes)
 			if e != nil {
 				return response.ErrUnavailable
@@ -296,21 +311,23 @@ func (s *Service) Logout(ctx context.Context, p security.Principal, claims *toke
 	})
 }
 
-// Profile 重新读取当前资料与权限，避免返回陈旧授权集合。
+// Profile 在同一个读门禁内读取当前资料、导航菜单和操作权限。
 func (s *Service) Profile(ctx context.Context, p security.Principal) (out Profile, err error) {
 	err = s.gate.Read(func() error {
 		account, e := s.users.Account(ctx, p.ID)
 		if e != nil {
 			return response.ErrUnavailable
 		}
-		if account.AuthVersion != p.AuthVersion {
+		if account.Status != 1 || len(account.RoleIDs) == 0 || account.AuthVersion != p.AuthVersion {
 			return response.ErrUnauthenticated
 		}
-		perms, e := s.users.Permissions(ctx, account.RoleIDs)
-		if e != nil {
-			return response.ErrUnavailable
+		out = Profile{Principal: account.Principal, Nickname: account.Nickname, Menus: []permission.Menu{}, Permissions: []string{}}
+		if !account.MustChangePassword {
+			out.Menus, out.Permissions, e = s.navigation.Access(ctx, account.Principal)
+			if e != nil {
+				return response.ErrUnavailable
+			}
 		}
-		out = Profile{Principal: account.Principal, Nickname: account.Nickname, Permissions: perms}
 		return nil
 	})
 	return out, err

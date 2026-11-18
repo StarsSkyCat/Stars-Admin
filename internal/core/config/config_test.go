@@ -140,26 +140,3 @@ func TestMigrationIgnoresUnusedConfigurationTypes(t *testing.T) {
 		t.Fatal("迁移仍须拒绝非法数据库配置")
 	}
 }
-
-func TestSeedConfigurationIsolationAndAuthCost(t *testing.T) {
-	dir := fixture(t, "prod")
-	t.Setenv("STARS_DATABASE_PASSWORD", "seed-test-password")
-	t.Setenv("STARS_JWT_ACCESS_TTL", "invalid")
-	t.Setenv("STARS_REDIS_TIMEOUT", "invalid")
-	cfg, err := LoadForSeed(dir)
-	if err != nil || cfg.ValidateSeed() != nil {
-		t.Fatal("seed 不应依赖 JWT/Redis")
-	}
-	t.Setenv("STARS_AUTH_BCRYPT_COST", "4")
-	cfg, err = LoadForSeed(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.ValidateSeed() == nil {
-		t.Fatal("生产不能使用测试哈希成本")
-	}
-	t.Setenv("STARS_AUTH_BCRYPT_COST", "invalid")
-	if _, err := LoadForSeed(dir); err == nil {
-		t.Fatal("seed 必须验证自身配置类型")
-	}
-}

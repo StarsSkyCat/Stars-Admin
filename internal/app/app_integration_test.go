@@ -32,7 +32,7 @@ func integrationConfig(t *testing.T) *config.Config {
 
 func TestRealRedisConcurrencyAndDependencyFailure(t *testing.T) {
 	cfg := integrationConfig(t)
-	if err := database.Migrate(t.Context(), cfg.Database, "up"); err != nil {
+	if err := database.Migrate(t.Context(), cfg, "up", firstPassword); err != nil {
 		t.Fatal(err)
 	}
 	cfg.RateLimit.Requests = 20
@@ -117,7 +117,7 @@ func TestInitializationFailureClosesDatabase(t *testing.T) {
 
 func TestDatabaseFailureKeepsLiveness(t *testing.T) {
 	cfg := integrationConfig(t)
-	if err := database.Migrate(t.Context(), cfg.Database, "up"); err != nil {
+	if err := database.Migrate(t.Context(), cfg, "up", firstPassword); err != nil {
 		t.Fatal(err)
 	}
 	a, err := New(t.Context(), cfg, zap.NewNop())

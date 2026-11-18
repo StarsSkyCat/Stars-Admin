@@ -3,10 +3,12 @@ package menu
 import (
 	"context"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/httpx"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/model"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/permission"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/response"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
 	"gorm.io/gorm"
@@ -23,12 +25,12 @@ type menuStore interface {
 	get(context.Context, *gorm.DB, model.ID) (menu, error)
 	save(context.Context, *gorm.DB, *menu, bool) error
 	remove(context.Context, *gorm.DB, []model.ID, model.ID) error
-	seedFind(context.Context, *gorm.DB, model.ID, Input) (menu, bool, error)
 }
 
-// Roles 在菜单删除事务内物理解绑引用，避免功能直接访问其他表。
+// Roles 提供本人菜单授权及菜单删除时的事务解绑。
 type Roles interface {
 	RemoveMenus(context.Context, *gorm.DB, []model.ID) error
+	MenuIDs(context.Context, []model.ID) (map[model.ID]bool, error)
 }
 
 // Service 管理树结构并提供可重建策略的有效权限快照。
@@ -203,27 +205,71 @@ func (s *Service) Permissions(ctx context.Context, tx *gorm.DB) (map[model.ID]st
 		return nil, err
 	}
 	out := map[model.ID]string{}
-	byID := map[model.ID]menu{}
-	for _, row := range rows {
-		byID[row.ID] = row
-	}
-	for _, row := range rows {
-		valid := row.Status == 1
-		seen := map[model.ID]bool{row.ID: true}
-		for parent := row.ParentID; valid && parent != 0; {
-			v, ok := byID[parent]
-			if !ok || v.Status != 1 || seen[parent] {
-				valid = false
-				break
+	children := activeMenuChildren(rows)
+	var visit func(model.ID)
+	visit = func(parent model.ID) {
+		for _, row := range children[parent] {
+			if row.Perm != nil && *row.Perm != "" {
+				out[row.ID] = *row.Perm
 			}
-			seen[parent] = true
-			parent = v.ParentID
-		}
-		if valid && row.Perm != nil && *row.Perm != "" {
-			out[row.ID] = *row.Perm
+			visit(row.ID)
 		}
 	}
+	visit(0)
 	return out, nil
+}
+
+// Access 从同一份启用树计算本人导航和操作码；祖级随授权后代展示。
+func (s *Service) Access(ctx context.Context, actor security.Principal) ([]permission.Menu, []string, error) {
+	granted, err := s.roles.MenuIDs(ctx, actor.RoleIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := s.repo.all(ctx, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	children := activeMenuChildren(rows)
+	admin := actor.Admin()
+	codes := []string{}
+	seenCodes := map[string]bool{}
+	var visit func(model.ID) ([]permission.Menu, bool)
+	visit = func(parent model.ID) ([]permission.Menu, bool) {
+		nodes := []permission.Menu{}
+		branchGranted := false
+		for _, row := range children[parent] {
+			allowed := granted[row.ID]
+			if allowed && row.Perm != nil && *row.Perm != "" && !seenCodes[*row.Perm] {
+				codes = append(codes, *row.Perm)
+				seenCodes[*row.Perm] = true
+			}
+			nested, descendantGranted := visit(row.ID)
+			allowedBranch := allowed || descendantGranted
+			branchGranted = branchGranted || allowedBranch
+			if row.Type != 3 && (admin || allowedBranch) {
+				nodes = append(nodes, permission.Menu{
+					ID: row.ID, Name: row.Name, Type: row.Type, Path: row.Path,
+					Component: row.Component, Icon: row.Icon, Sort: row.Sort,
+					Visible: row.Visible == 1, Children: nested,
+				})
+			}
+		}
+		return nodes, branchGranted
+	}
+	nodes, _ := visit(0)
+	slices.Sort(codes)
+	return nodes, codes, nil
+}
+
+// 只从根节点向下遍历，停用节点及其后代、孤儿和孤立环均不会生效。
+func activeMenuChildren(rows []menu) map[model.ID][]menu {
+	children := make(map[model.ID][]menu)
+	for _, row := range rows {
+		if row.Status == 1 {
+			children[row.ParentID] = append(children[row.ParentID], row)
+		}
+	}
+	return children
 }
 
 // Validate 校验菜单授权只能引用现有且启用的节点。

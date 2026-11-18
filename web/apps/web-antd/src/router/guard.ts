@@ -1,133 +1,84 @@
 import type { Router } from 'vue-router';
 
-import { LOGIN_PATH } from '@vben/constants';
 import { preferences } from '@vben/preferences';
-import { useAccessStore, useUserStore } from '@vben/stores';
+import { useAccessStore, useTabbarStore } from '@vben/stores';
 import { startProgress, stopProgress } from '@vben/utils';
 
-import { accessRoutes, coreRouteNames } from '#/router/routes';
+import { ApiError } from '#/api/errors';
 import { useAuthStore } from '#/store';
+import { sessions } from '#/store/session';
 
-import { generateAccess } from './access';
+import { createAccessRoutes, mountAccessRoutes } from './access';
+import {
+  authRedirect,
+  CHANGE_PASSWORD_PATH,
+  HOME_PATH,
+  PROFILE_ERROR_PATH,
+} from './policy';
 
-/**
- * 通用守卫配置
- * @param router
- */
-function setupCommonGuard(router: Router) {
-  // 记录已经加载的页面
-  const loadedPaths = new Set<string>();
+function createRouterGuard(router: Router, resetRoutes: () => void) {
+  let mountedRoutes = '';
+  router.beforeEach(async (to) => {
+    if (preferences.transition.progress) void startProgress();
+    const auth = useAuthStore();
+    const access = useAccessStore();
+    const session = sessions.read();
+    if (!session) return authRedirect(to.path, false, false);
+    if (to.path === PROFILE_ERROR_PATH) return true;
 
-  router.beforeEach((to) => {
-    to.meta.loaded = loadedPaths.has(to.path);
+    let profile;
+    try {
+      profile = await auth.fetchProfile();
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 2006) {
+        await sessions.clear(session.id);
+      }
+      const current = sessions.read();
+      if (!current) return authRedirect(to.path, false, false) ?? true;
+      if (current.id !== session.id)
+        return current.mustChangePassword ? CHANGE_PASSWORD_PATH : HOME_PATH;
+      if (error instanceof ApiError && error.code === 2008)
+        return authRedirect(to.path, true, true) ?? true;
+      return PROFILE_ERROR_PATH;
+    }
 
-    // 页面加载进度条
-    if (!to.meta.loaded && preferences.transition.progress) {
-      void startProgress();
+    const current = sessions.read();
+    if (current?.id !== session.id) return false;
+    const restricted = current.mustChangePassword || profile.mustChangePassword;
+    const redirect = authRedirect(to.path, true, restricted);
+    if (redirect) return redirect;
+    if (restricted) return true;
+
+    const routes = createAccessRoutes(profile);
+    const snapshot = JSON.stringify(routes);
+    const changed = !access.isAccessChecked || mountedRoutes !== snapshot;
+    if (changed) {
+      // 同步替换路由，避免旧会话的异步装配晚于新会话。
+      resetRoutes();
+      access.setAccessMenus(mountAccessRoutes(router, routes));
+      access.setAccessRoutes(routes);
+      access.setIsAccessChecked(true);
+      useTabbarStore().$reset();
+      mountedRoutes = snapshot;
+    }
+    const resolved = router.resolve(to.fullPath);
+    if (
+      resolved.name === 'FallbackNotFound' &&
+      /^\/(?:system|menu-groups)(?:\/|$)/i.test(to.path)
+    ) {
+      return { name: 'Forbidden' };
+    }
+    if (changed) {
+      return { ...resolved, replace: true };
     }
     return true;
   });
-
-  router.afterEach((to) => {
-    // 记录页面是否加载,如果已经加载，后续的页面切换动画等效果不在重复执行
-
-    loadedPaths.add(to.path);
-
-    // 关闭页面加载进度条
-    if (preferences.transition.progress) {
-      void stopProgress();
-    }
+  router.afterEach(() => {
+    if (preferences.transition.progress) void stopProgress();
   });
-}
-
-/**
- * 权限访问守卫配置
- * @param router
- */
-function setupAccessGuard(router: Router) {
-  router.beforeEach(async (to, from) => {
-    const accessStore = useAccessStore();
-    const userStore = useUserStore();
-    const authStore = useAuthStore();
-
-    // 基本路由，这些路由不需要进入权限拦截
-    if (coreRouteNames.includes(to.name)) {
-      if (to.path === LOGIN_PATH && accessStore.accessToken) {
-        return decodeURIComponent(
-          (to.query?.redirect as string) ||
-            userStore.userInfo?.homePath ||
-            preferences.app.defaultHomePath,
-        );
-      }
-      return true;
-    }
-
-    // accessToken 检查
-    if (!accessStore.accessToken) {
-      // 明确声明忽略权限访问权限，则可以访问
-      if (to.meta.ignoreAccess) {
-        return true;
-      }
-
-      // 没有访问权限，跳转登录页面
-      if (to.fullPath !== LOGIN_PATH) {
-        return {
-          path: LOGIN_PATH,
-          // 如不需要，直接删除 query
-          query:
-            to.fullPath === preferences.app.defaultHomePath
-              ? {}
-              : { redirect: encodeURIComponent(to.fullPath) },
-          // 携带当前跳转的页面，登录后重新跳转该页面
-          replace: true,
-        };
-      }
-      return to;
-    }
-
-    // 是否已经生成过动态路由
-    if (accessStore.isAccessChecked) {
-      return true;
-    }
-
-    // 生成路由表
-    // 当前登录用户拥有的角色标识列表
-    const userInfo = userStore.userInfo || (await authStore.fetchUserInfo());
-    const userRoles = userInfo.roles ?? [];
-
-    // 生成菜单和路由
-    const { accessibleMenus, accessibleRoutes } = await generateAccess({
-      roles: userRoles,
-      router,
-      // 则会在菜单中显示，但是访问会被重定向到403
-      routes: accessRoutes,
-    });
-
-    // 保存菜单信息和路由信息
-    accessStore.setAccessMenus(accessibleMenus);
-    accessStore.setAccessRoutes(accessibleRoutes);
-    accessStore.setIsAccessChecked(true);
-    const redirectPath = (from.query.redirect ??
-      (to.path === preferences.app.defaultHomePath
-        ? userInfo.homePath || preferences.app.defaultHomePath
-        : to.fullPath)) as string;
-
-    return {
-      ...router.resolve(decodeURIComponent(redirectPath)),
-      replace: true,
-    };
+  router.onError(() => {
+    if (preferences.transition.progress) void stopProgress();
   });
-}
-
-/**
- * 项目守卫配置
- * @param router
- */
-function createRouterGuard(router: Router) {
-  /** 通用 */
-  setupCommonGuard(router);
-  /** 权限访问 */
-  setupAccessGuard(router);
 }
 
 export { createRouterGuard };

@@ -19,6 +19,8 @@ type Settings struct {
 	LockMinutes        int
 }
 
+type idSource interface{ Next() (int64, error) }
+
 // Service 管理业务参数，认证读取不使用普通缓存。
 type Service struct {
 	db    *gorm.DB

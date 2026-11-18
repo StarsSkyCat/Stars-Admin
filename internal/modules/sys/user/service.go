@@ -27,7 +27,6 @@ type changeGate interface {
 type Roles interface {
 	Resolve(context.Context, *gorm.DB, []model.ID) ([]model.ID, error)
 	CanAssign(context.Context, *gorm.DB, security.Principal, model.ID, []model.ID) error
-	Permissions(context.Context, *gorm.DB, []model.ID) ([]string, error)
 }
 
 // Departments 校验有效部门引用。
@@ -380,11 +379,6 @@ func (s *Service) Account(ctx context.Context, id model.ID) (security.Account, e
 		return security.Account{}, httpx.DBError(err)
 	}
 	return s.account(ctx, row)
-}
-
-// Permissions 只读取当前有效角色的权限。
-func (s *Service) Permissions(ctx context.Context, ids []model.ID) ([]string, error) {
-	return s.roles.Permissions(ctx, nil, ids)
 }
 
 // RecordLogin 更新最后登录元信息，不延长会话有效期。

@@ -117,25 +117,12 @@ type RateLimit struct {
 
 // Load 合并基础、环境文件和显式绑定的环境变量，不在此连接任何服务。
 func Load(dir string) (*Config, error) {
-	return load(dir, false)
+	return loadCommand(dir, nil)
 }
 
 // LoadForMigration 只解码数据库与日志，损坏的 HTTP/Redis/JWT 配置不能阻碍结构修复。
 func LoadForMigration(dir string) (*Config, error) {
-	return load(dir, true)
-}
-
-// LoadForSeed 只解码 seed 所需字段，保持 CLI 与 HTTP/Redis/JWT 解耦。
-func LoadForSeed(dir string) (*Config, error) {
-	return loadCommand(dir, []string{"database", "log", "auth", "id"})
-}
-
-func load(dir string, migrationOnly bool) (*Config, error) {
-	var sections []string
-	if migrationOnly {
-		sections = []string{"database", "log"}
-	}
-	return loadCommand(dir, sections)
+	return loadCommand(dir, []string{"database", "log"})
 }
 
 func loadCommand(dir string, sections []string) (*Config, error) {
@@ -183,17 +170,6 @@ func loadCommand(dir string, sections []string) (*Config, error) {
 	// APP_ENV 是环境选择的唯一来源，不能由 YAML 或 STARS_APP_ENV 改写。
 	c.App.Env = env
 	return &c, nil
-}
-
-// ValidateSeed 仅验证初始化所用的数据库、哈希成本与 ID 节点。
-func (c *Config) ValidateSeed() error {
-	if err := c.ValidateDatabase(); err != nil {
-		return err
-	}
-	if c.Auth.BcryptCost < 4 || c.Auth.BcryptCost > 14 || (c.App.Env == "prod" && c.Auth.BcryptCost < 10) || c.ID.Node < 0 || c.ID.Node > 1023 {
-		return errors.New("seed 哈希成本或雪花节点配置无效")
-	}
-	return nil
 }
 
 func bind(v *viper.Viper, typ reflect.Type, prefix string) error {
