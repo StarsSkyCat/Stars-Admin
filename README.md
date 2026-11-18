@@ -2,7 +2,7 @@
 
 Stars-Admin 是基于 Go、Gin、GORM、PostgreSQL 和 Redis 的模块化中后台后端框架，提供认证授权、系统管理、定时任务和代码生成能力，可作为业务后台的开发基础。
 
-项目仅包含后端 API，当前支持 PostgreSQL；应用、任务调度和授权同步按单实例设计。
+Stars-Admin 在同一个仓库中维护 Go 后端和 `web/` 下的 Vben Admin 前端。后端支持 PostgreSQL，应用、任务调度和授权同步按单实例设计。前端保留 Ant Design Vue 和 Element Plus 两个应用，真实 API 适配待完成，开发与接入步骤见本地 `docs/`。
 
 ## 功能
 

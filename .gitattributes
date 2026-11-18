@@ -1,1 +1,16 @@
 * text=auto eol=lf
+
+# 前端 Windows 脚本保持 CRLF。
+/web/**/*.[cC][mM][dD] text eol=crlf
+/web/**/*.[bB][aA][tT] text eol=crlf
+
+# 前端静态资源沿用 Vben 的二进制属性。
+/web/**/*.ico binary
+/web/**/*.png binary
+/web/**/*.jpg binary
+/web/**/*.jpeg binary
+/web/**/*.gif binary
+/web/**/*.webp binary
+/web/**/*.svg binary
+/web/**/*.woff binary
+/web/**/*.woff2 binary
