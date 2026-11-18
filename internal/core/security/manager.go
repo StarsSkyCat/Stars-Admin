@@ -4,6 +4,7 @@ package security
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,12 +27,7 @@ type Principal struct {
 
 // Admin 仅有效的保留角色可以获得管理权限。
 func (p Principal) Admin() bool {
-	for _, id := range p.RoleIDs {
-		if id == 1 {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.RoleIDs, 1)
 }
 
 // Account 是跨服务认证快照，哈希永不参与 JSON 输出。
@@ -68,6 +64,7 @@ type Manager struct {
 	project  func(context.Context, *gorm.DB) ([]permission.Rule, error)
 	pending  map[int64]int64
 	rebuild  bool
+	reload   bool
 	ready    atomic.Bool
 	log      *zap.Logger
 	timeout  time.Duration
@@ -124,6 +121,15 @@ func (m *Manager) Read(fn func() error) error {
 
 // Change 在同一事务写业务与投影，提交后同步 Redis 和内存策略。
 func (m *Manager) Change(ctx context.Context, change func(*gorm.DB) ([]Revocation, error)) error {
+	return m.change(ctx, true, change)
+}
+
+// Update 串行提交不影响 Casbin 投影的变更，并同步必要的会话撤销。
+func (m *Manager) Update(ctx context.Context, change func(*gorm.DB) ([]Revocation, error)) error {
+	return m.change(ctx, false, change)
+}
+
+func (m *Manager) change(ctx context.Context, project bool, change func(*gorm.DB) ([]Revocation, error)) error {
 	ctx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 	m.mu.Lock()
@@ -139,12 +145,14 @@ func (m *Manager) Change(ctx context.Context, change func(*gorm.DB) ([]Revocatio
 		if err != nil {
 			return err
 		}
-		rules, err := m.project(ctx, tx)
-		if err != nil {
-			return err
-		}
-		if err := m.policies.Replace(ctx, tx, rules); err != nil {
-			return err
+		if project {
+			rules, err := m.project(ctx, tx)
+			if err != nil {
+				return err
+			}
+			if err := m.policies.Replace(ctx, tx, rules); err != nil {
+				return err
+			}
 		}
 		prepared = true
 		return nil
@@ -161,6 +169,12 @@ func (m *Manager) Change(ctx context.Context, change func(*gorm.DB) ([]Revocatio
 			return response.ErrUnavailable
 		}
 		return err
+	}
+	if project {
+		m.reload = true
+	}
+	if len(revoked) == 0 && m.ready.Load() && !m.reload {
+		return nil
 	}
 	m.ready.Store(false)
 	for _, r := range revoked {
@@ -189,6 +203,7 @@ func (m *Manager) synchronize(ctx context.Context) error {
 			return err
 		}
 		m.rebuild = false
+		m.reload = true
 	}
 	var combined error
 	for id, version := range m.pending {
@@ -198,8 +213,12 @@ func (m *Manager) synchronize(ctx context.Context) error {
 			delete(m.pending, id)
 		}
 	}
-	if err := m.policies.Reload(ctx); err != nil {
-		combined = errors.Join(combined, err)
+	if m.reload {
+		if err := m.policies.Reload(ctx); err != nil {
+			combined = errors.Join(combined, err)
+		} else {
+			m.reload = false
+		}
 	}
 	m.ready.Store(combined == nil)
 	return combined

@@ -13,9 +13,17 @@ import (
 
 type directGate struct{}
 
-func (directGate) Change(_ context.Context, fn func(*gorm.DB) ([]security.Revocation, error)) error {
+func (directGate) Update(_ context.Context, fn func(*gorm.DB) ([]security.Revocation, error)) error {
 	_, err := fn(nil)
 	return err
+}
+
+func (directGate) Read(fn func() error) error { return fn() }
+
+func (directGate) Allow(security.Principal, string) error { return nil }
+
+func (directGate) Resolve(context.Context, *gorm.DB, security.Principal) (security.Scope, error) {
+	return security.Scope{All: true}, nil
 }
 
 type memoryDepartments struct {
@@ -57,7 +65,8 @@ func (r *memoryDepartments) save(_ context.Context, _ *gorm.DB, row *department,
 
 func TestMoveSubtreeAndCycleProtection(t *testing.T) {
 	repo := &memoryDepartments{rows: map[model.ID]department{10: {ID: 10, Name: "A", Ancestors: "0", Status: 1}, 20: {ID: 20, Name: "B", Ancestors: "0", Status: 1}, 11: {ID: 11, ParentID: 10, Name: "子", Ancestors: "0,10", Status: 1}, 100: {ID: 100, Name: "边界", Ancestors: "0", Status: 1}, 101: {ID: 101, ParentID: 100, Name: "非后代", Ancestors: "0,100", Status: 1}}}
-	s := &Service{repo: repo, gate: directGate{}}
+	gate := directGate{}
+	s := &Service{repo: repo, gate: gate, access: security.NewScopeAccess(gate, gate)}
 	if _, err := s.Save(t.Context(), security.Principal{ID: 1}, 10, Input{ParentID: 11, Name: "A", Status: 1}); !errors.Is(err, response.ErrConflict) || len(repo.saved) != 0 {
 		t.Fatal("后代父级必须在写入前拒绝")
 	}
@@ -71,11 +80,13 @@ func TestMoveSubtreeAndCycleProtection(t *testing.T) {
 
 func TestDepartmentPaginationAndSortValidation(t *testing.T) {
 	repo := &memoryDepartments{rows: map[model.ID]department{1: {ID: 1, Name: "B"}, 2: {ID: 2, Name: "A"}}}
-	s := &Service{repo: repo}
+	gate := directGate{}
+	s := &Service{repo: repo, access: security.NewScopeAccess(gate, gate)}
+	ctx := security.WithPrincipal(t.Context(), security.Principal{ID: 1})
 	q := Query{}
 	q.PageSize = 1
 	q.OrderBy = "name asc"
-	out, err := s.List(t.Context(), q)
+	out, err := s.List(ctx, q)
 	if err != nil || out.Total != 2 || len(out.List) != 1 || out.List[0].Name != "A" {
 		t.Fatal("分页或排序错误")
 	}
@@ -83,7 +94,7 @@ func TestDepartmentPaginationAndSortValidation(t *testing.T) {
 		t.Fatal("未将标准化页码与可信列名交给仓储")
 	}
 	q.OrderBy = "name;DROP TABLE"
-	if _, err := s.List(t.Context(), q); err == nil {
+	if _, err := s.List(ctx, q); err == nil {
 		t.Fatal("非法排序未拒绝")
 	}
 }

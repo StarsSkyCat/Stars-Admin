@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/model"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/response"
 	"gorm.io/gorm"
 )
 
@@ -27,6 +28,56 @@ type ScopeRule struct {
 type Resolver interface {
 	Resolve(context.Context, *gorm.DB, Principal) (Scope, error)
 }
+
+// ScopeGate 提供范围读操作和授权变更共享的门禁。
+type ScopeGate interface {
+	Read(func() error) error
+	Allow(Principal, string) error
+}
+
+// ScopeAccess 在同一安全门禁内核对动作权限并解析数据范围。
+type ScopeAccess struct {
+	gate     ScopeGate
+	resolver Resolver
+}
+
+// NewScopeAccess 接收业务必须提供的门禁和范围解析器。
+func NewScopeAccess(gate ScopeGate, resolver Resolver) ScopeAccess {
+	return ScopeAccess{gate: gate, resolver: resolver}
+}
+
+// Context 供持有安全写锁的事务核对动作权限及范围。
+func (a ScopeAccess) Context(ctx context.Context, tx *gorm.DB, p Principal, permission string) (context.Context, error) {
+	if p.ID <= 0 || a.gate == nil || a.resolver == nil {
+		return nil, response.ErrPermission
+	}
+	scope, err := a.resolver.Resolve(ctx, tx, p)
+	if err != nil {
+		return nil, err
+	}
+	if err := a.gate.Allow(p, permission); err != nil {
+		return nil, err
+	}
+	return WithScope(ctx, scope), nil
+}
+
+// Read 在同一次受保护的读取里执行授权、范围解析和数据查询。
+func (a ScopeAccess) Read[T any](ctx context.Context, p Principal, permission string, query func(context.Context) (T, error)) (T, error) {
+	var out T
+	if a.gate == nil {
+		return out, response.ErrPermission
+	}
+	err := a.gate.Read(func() error {
+		scoped, err := a.Context(ctx, nil, p, permission)
+		if err != nil {
+			return err
+		}
+		out, err = query(scoped)
+		return err
+	})
+	return out, err
+}
+
 type principalKey struct{}
 type scopeKey struct{}
 

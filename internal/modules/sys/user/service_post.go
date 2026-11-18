@@ -23,11 +23,8 @@ func (s *Service) GrantPosts(ctx context.Context, p security.Principal, id model
 	if err := httpx.UniqueIDs(ids); err != nil {
 		return err
 	}
-	if err := s.gate.Allow(p, "sys:user:grant"); err != nil {
-		return err
-	}
-	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
-		scoped, err := s.scopeContext(ctx, tx, p, "sys:user:grant")
+	return s.gate.Update(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		scoped, err := s.access.Context(ctx, tx, p, "sys:user:grant")
 		if err != nil {
 			return nil, err
 		}
@@ -59,14 +56,12 @@ func (s *Service) RevokeAll(ctx context.Context, p security.Principal, id model.
 	if !p.Admin() {
 		return response.ErrPermission
 	}
-	if err := s.gate.Allow(p, "sys:audit:forceLogout"); err != nil {
-		return err
-	}
-	if id == 1 && !p.Admin() {
-		return response.ErrPermission
-	}
-	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
-		if _, err := s.repo.get(ctx, tx, id); err != nil {
+	return s.gate.Update(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		scoped, err := s.access.Context(ctx, tx, p, "sys:audit:forceLogout")
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.repo.get(scoped, tx, id); err != nil {
 			return nil, httpx.DBError(err)
 		}
 		return s.repo.bump(ctx, tx, []model.ID{id})

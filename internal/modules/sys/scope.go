@@ -3,11 +3,12 @@ package sys
 import (
 	"context"
 
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/response"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
 	"gorm.io/gorm"
 )
 
-type scopeResolver struct{ features }
+type scopeResolver struct{ *features }
 
 func (r scopeResolver) Resolve(ctx context.Context, tx *gorm.DB, p security.Principal) (security.Scope, error) {
 	out := security.Scope{UserID: p.ID}
@@ -18,6 +19,9 @@ func (r scopeResolver) Resolve(ctx context.Context, tx *gorm.DB, p security.Prin
 	p, identityErr = r.users.ScopeIdentity(ctx, tx, p)
 	if identityErr != nil {
 		return out, identityErr
+	}
+	if p.MustChangePassword {
+		return out, response.ErrPasswordChange
 	}
 	if p.Admin() {
 		out.All = true

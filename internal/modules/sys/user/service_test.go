@@ -18,6 +18,9 @@ func (g *guardGate) Change(context.Context, func(*gorm.DB) ([]security.Revocatio
 	g.writes++
 	return errors.New("不应写入")
 }
+func (g *guardGate) Update(ctx context.Context, fn func(*gorm.DB) ([]security.Revocation, error)) error {
+	return g.Change(ctx, fn)
+}
 func (*guardGate) Allow(security.Principal, string) error { return nil }
 
 func TestUserReservedAndPasswordGuards(t *testing.T) {

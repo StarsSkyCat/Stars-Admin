@@ -26,17 +26,28 @@ var templates embed.FS
 
 type renderField struct {
 	column
-	ModelType string
-	ModelTag  string
-	JSONTag   string
-	FormTag   string
-	ToTag     string
-	Input     bool
-	Between   bool
-	ApplyCode string
-	QueryCode string
-	Sample    string
+	ModelType        string
+	ModelTag         string
+	JSONTag          string
+	FormTag          string
+	ToTag            string
+	Input            bool
+	Between          bool
+	UDT              string
+	FilterKind       string
+	MaxRunes         int
+	Precision        int
+	Scale            int
+	RequiredOnCreate bool
+	InsertNull       bool
+	Sample           string
 }
+
+type scopeField struct {
+	Name     string
+	Nullable bool
+}
+
 type renderData struct {
 	ModulePath       string
 	Module           string
@@ -48,7 +59,8 @@ type renderData struct {
 	AdminOnly        bool
 	DepartmentColumn string
 	OwnerColumn      string
-	MatchCode        string
+	DepartmentField  scopeField
+	OwnerField       scopeField
 	Helpers          string
 }
 
@@ -101,13 +113,32 @@ func render(modulePath string, row table, cols []column, opts options) ([]Genera
 			continue
 		}
 		f := renderField{column: c, ModelType: c.GoType, ModelTag: "gorm:\"column:" + c.ColumnName + "\"", JSONTag: "json:\"" + c.JSONField + "\"", FormTag: "form:\"" + c.JSONField + "\"", ToTag: "form:\"" + c.JSONField + "To\"", Input: c.IsInsert || c.IsEdit, Between: c.QueryType == "BETWEEN"}
+		meta := metadata[c.ColumnName]
+		f.UDT = meta.UDT
+		f.FilterKind = meta.UDT
+		if c.GoType == "model.ID" {
+			f.FilterKind = "id"
+		}
+		f.MaxRunes = 4096
+		if c.MaxLength != nil {
+			f.MaxRunes = *c.MaxLength
+		}
+		if meta.Precision != nil {
+			f.Precision = *meta.Precision
+		}
+		f.Scale = -1
+		if meta.Scale != nil {
+			f.Scale = *meta.Scale
+		}
+		f.RequiredOnCreate = !meta.Nullable && (meta.Default == nil || c.IsRequired)
+		f.InsertNull = c.IsNullable && meta.Default == nil
 		if c.IsNullable {
 			f.ModelType = "*" + c.GoType
 		}
 		switch c.GoType {
 		case "string":
 			f.Sample = strconv.Quote("x")
-			if metadata[c.ColumnName].UDT == "numeric" {
+			if f.UDT == "numeric" {
 				f.Sample = strconv.Quote("1")
 				numeric = true
 			}
@@ -122,14 +153,11 @@ func render(modulePath string, row table, cols []column, opts options) ([]Genera
 		default:
 			f.Sample = "int(1)"
 		}
-		f.ApplyCode = applyCode(c, metadata[c.ColumnName])
-		if c.IsQuery {
-			query = true
-			f.QueryCode = queryCode(c, metadata[c.ColumnName])
-		}
+		query = query || c.IsQuery
 		data.Fields = append(data.Fields, f)
 	}
-	data.MatchCode = matchCode(opts.Scope, cols)
+	data.DepartmentField = mappedField(opts.Scope.DepartmentColumn, cols)
+	data.OwnerField = mappedField(opts.Scope.OwnerColumn, cols)
 	if numeric || query {
 		data.Helpers = decimalHelper
 	}
@@ -162,154 +190,21 @@ func render(modulePath string, row table, cols []column, opts options) ([]Genera
 	files = append(files, GeneratedFile{draft + ".up.sql", draftSQL(opts.Snapshot)}, GeneratedFile{draft + ".down.sql", "-- 仅供隔离库 review，禁止对已有业务表直接执行。\nDROP TABLE IF EXISTS " + quoteSQL(row.TableNameValue) + ";\n"}, GeneratedFile{base + "ASSEMBLY.md", assembly(data)})
 	return files, nil
 }
-func applyCode(c column, m MetadataColumn) string {
-	validate := ""
-	v := "*in." + c.GoField
-	switch c.GoType {
-	case "model.ID":
-		validate = "if " + v + "<=0{return nil,response.ErrInvalidParam};"
-	case "int":
-		bits := 32
-		if m.UDT == "int2" {
-			bits = 16
-		}
-		lower, upper := int64(-2147483648), int64(2147483647)
-		if bits == 16 {
-			lower, upper = -32768, 32767
-		}
-		validate = fmt.Sprintf("if %s < %d || %s > %d{return nil,response.ErrInvalidParam};", v, lower, v, upper)
-	case "string":
-		maxLen := 4096
-		if c.MaxLength != nil {
-			maxLen = *c.MaxLength
-		}
-		validate = fmt.Sprintf("if utf8.RuneCountInString(%s)>%d{return nil,response.ErrInvalidParam};", v, maxLen)
-		if m.UDT == "numeric" {
-			p, scale := 0, -1
-			if m.Precision != nil {
-				p = *m.Precision
-			}
-			if m.Scale != nil {
-				scale = *m.Scale
-			}
-			validate += fmt.Sprintf("if !validDecimal(%s,%d,%d){return nil,response.ErrInvalidParam};", v, p, scale)
+func mappedField(name string, cols []column) scopeField {
+	switch name {
+	case "created_by":
+		return scopeField{Name: "CreatedBy"}
+	case "updated_by":
+		return scopeField{Name: "UpdatedBy"}
+	case "id":
+		return scopeField{Name: "ID"}
+	}
+	for _, c := range cols {
+		if c.ColumnName == name {
+			return scopeField{Name: c.GoField, Nullable: c.IsNullable}
 		}
 	}
-	assign := "row." + c.GoField + "=*in." + c.GoField + ";"
-	if c.IsNullable {
-		assign = "row." + c.GoField + "=in." + c.GoField + ";"
-	}
-	if c.GoType == "time.Time" {
-		if c.IsNullable {
-			assign = "row." + c.GoField + "=new(in." + c.GoField + ".UTC());"
-		} else {
-			assign = "row." + c.GoField + "=in." + c.GoField + ".UTC();"
-		}
-	}
-	body := "if in." + c.GoField + "!=nil{" + validate + assign + "if create{columns=append(columns," + strconv.Quote(c.ColumnName) + ")}}"
-	missing := ""
-	if !m.Nullable && (m.Default == nil || c.IsRequired) {
-		missing += "if create{return nil,response.ErrInvalidParam};"
-	}
-	if c.IsNullable {
-		missing += "row." + c.GoField + "=nil;"
-		if m.Default == nil {
-			missing += "if create{columns=append(columns," + strconv.Quote(c.ColumnName) + ")};"
-		}
-	}
-	if missing != "" {
-		body += "else{" + missing + "}"
-	}
-	create, edit := "", ""
-	if c.IsInsert {
-		create = body
-	} else {
-		create = "if in." + c.GoField + "!=nil{return nil,response.ErrInvalidParam}"
-	}
-	if c.IsEdit {
-		edit = body
-	} else {
-		edit = "if in." + c.GoField + "!=nil{return nil,response.ErrInvalidParam}"
-	}
-	return "if create{" + create + "}else{" + edit + "}"
-}
-func queryCode(c column, m MetadataColumn) string {
-	maxLen, p, scale := 4096, 0, -1
-	if c.MaxLength != nil {
-		maxLen = *c.MaxLength
-	}
-	if m.Precision != nil {
-		p = *m.Precision
-	}
-	if m.Scale != nil {
-		scale = *m.Scale
-	}
-	kind := m.UDT
-	if c.GoType == "model.ID" {
-		kind = "id"
-	}
-	parse := func(value string) string {
-		return fmt.Sprintf("parseFilter(%s,%q,%d,%d,%d)", value, kind, maxLen, p, scale)
-	}
-	f := "q." + c.GoField
-	code := "{if " + f + "!=\"\""
-	if c.QueryType == "BETWEEN" {
-		code += "||" + f + "To!=\"\""
-	}
-	code += "{"
-	if c.QueryType == "BETWEEN" {
-		code += "if " + f + "==\"\"||" + f + "To==\"\"{return response.ErrInvalidParam};"
-	}
-	code += "v,err:=" + parse(f) + ";if err!=nil{return err};"
-	if c.QueryType == "LIKE" {
-		code += `text,ok:=v.(string);if !ok{return response.ErrInvalidParam};v="%"+text+"%";`
-	}
-	values := "[]any{v}"
-	if c.QueryType == "BETWEEN" {
-		code += "to,err:=" + parse(f+"To") + ";if err!=nil{return err};"
-		values = "[]any{v,to}"
-	}
-	return code + "filters=append(filters,filter{" + strconv.Quote(c.ColumnName) + "," + strconv.Quote(c.QueryType) + "," + values + "})}}"
-}
-func matchCode(scope ScopeConfig, cols []column) string {
-	if scope.Mode == "admin" {
-		return ""
-	}
-	lookup := func(name string) (string, bool) {
-		if name == "created_by" {
-			return "row.CreatedBy", false
-		}
-		if name == "updated_by" {
-			return "row.UpdatedBy", false
-		}
-		if name == "id" {
-			return "row.ID", false
-		}
-		for _, c := range cols {
-			if c.ColumnName == name {
-				return "row." + c.GoField, c.IsNullable
-			}
-		}
-		return "", false
-	}
-	code := ""
-	if scope.DepartmentColumn != "" {
-		field, nullable := lookup(scope.DepartmentColumn)
-		if nullable {
-			code += "if " + field + "!=nil&&scope.AllowsDepartment(*" + field + "){return true};"
-		} else {
-			code += "if scope.AllowsDepartment(" + field + "){return true};"
-		}
-	}
-	if scope.OwnerColumn != "" {
-		field, nullable := lookup(scope.OwnerColumn)
-		if nullable {
-			code += "if scope.Self&&" + field + "!=nil&&*" + field + "==scope.UserID{return true}"
-		} else {
-			code += "if scope.Self&&" + field + "==scope.UserID{return true}"
-		}
-	}
-	return code
+	return scopeField{}
 }
 func quoteSQL(name string) string { return `"` + strings.ReplaceAll(name, `"`, `""`) + `"` }
 func draftSQL(s Snapshot) string {

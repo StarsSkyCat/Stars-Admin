@@ -15,7 +15,7 @@ import (
 
 type idSource interface{ Next() (int64, error) }
 type changeGate interface {
-	Change(context.Context, func(*gorm.DB) ([]security.Revocation, error)) error
+	Update(context.Context, func(*gorm.DB) ([]security.Revocation, error)) error
 }
 
 type departmentStore interface {
@@ -38,12 +38,12 @@ type Service struct {
 	ids    idSource
 	gate   changeGate
 	users  Users
-	scopes security.Resolver
+	access security.ScopeAccess
 }
 
 // New 构造部门业务。
-func New(db *gorm.DB, ids idSource, gate changeGate) *Service {
-	return &Service{repo: repository{db}, ids: ids, gate: gate}
+func New(db *gorm.DB, ids idSource, gate changeGate, access security.ScopeAccess) *Service {
+	return &Service{repo: repository{db}, ids: ids, gate: gate, access: access}
 }
 
 // SetUsers 在功能装配完成后连接引用检查接口。
@@ -61,13 +61,8 @@ func (s *Service) Exists(ctx context.Context, tx *gorm.DB, id model.ID) error {
 	return nil
 }
 
-// List 返回分页部门；排序字段只允许既有业务列。
+// list 返回已授权范围内的分页部门。
 func (s *Service) list(ctx context.Context, q Query) (response.Page[View], error) {
-	var scopeErr error
-	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
-	if scopeErr != nil {
-		return response.Page[View]{}, scopeErr
-	}
 	if err := q.Normalize(); err != nil {
 		return response.Page[View]{}, err
 	}
@@ -86,24 +81,14 @@ func (s *Service) list(ctx context.Context, q Query) (response.Page[View], error
 	return result, nil
 }
 
-// Get 返回单个部门。
+// get 返回已授权范围内的单个部门。
 func (s *Service) get(ctx context.Context, id model.ID) (View, error) {
-	var scopeErr error
-	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
-	if scopeErr != nil {
-		return View{}, scopeErr
-	}
 	row, err := s.repo.get(ctx, nil, id)
 	return view(row), httpx.DBError(err)
 }
 
-// Tree 返回按显示顺序排列的完整部门树。
+// tree 返回按显示顺序排列的可见部门树。
 func (s *Service) tree(ctx context.Context) ([]View, error) {
-	var scopeErr error
-	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
-	if scopeErr != nil {
-		return nil, scopeErr
-	}
 	rows, err := s.repo.all(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -114,13 +99,12 @@ func (s *Service) tree(ctx context.Context) ([]View, error) {
 // Save 在一个事务中校验父链并更新整个子树路径。
 func (s *Service) Save(ctx context.Context, p security.Principal, id model.ID, in Input) (View, error) {
 	var out department
-	err := s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+	err := s.gate.Update(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
 		perm := "sys:dept:edit"
 		if id == 0 {
 			perm = "sys:dept:add"
 		}
-		var scopeErr error
-		ctx, scopeErr = s.scopeContext(ctx, tx, p, perm)
+		ctx, scopeErr := s.access.Context(ctx, tx, p, perm)
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
@@ -215,9 +199,8 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, ids []model.
 	if len(ids) == 0 {
 		return response.ErrInvalidParam
 	}
-	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
-		var scopeErr error
-		ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:dept:remove")
+	return s.gate.Update(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+		ctx, scopeErr := s.access.Context(ctx, tx, p, "sys:dept:remove")
 		if scopeErr != nil {
 			return nil, scopeErr
 		}

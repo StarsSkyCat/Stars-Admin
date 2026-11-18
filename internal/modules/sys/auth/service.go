@@ -134,9 +134,6 @@ func (s *Service) Login(ctx context.Context, in LoginInput, ip string, userAgent
 	if err = s.limit(ctx, "login:ip:"+session.Digest(ip), 20); err != nil {
 		return out, err
 	}
-	if err = s.limit(ctx, "login:name:"+session.Digest(in.Username), 10); err != nil {
-		return out, err
-	}
 	err = s.gate.Read(func() error {
 		settings, e := s.settingsFor(ctx)
 		if e != nil {
@@ -153,6 +150,9 @@ func (s *Service) Login(ctx context.Context, in LoginInput, ip string, userAgent
 			if !ok {
 				return response.ErrCaptcha
 			}
+		}
+		if e := s.limit(ctx, "login:name:"+session.Digest(in.Username), 10); e != nil {
+			return e
 		}
 		locked, e := s.repo.locked(ctx, in.Username, settings.PasswordRetryLimit)
 		if e != nil {

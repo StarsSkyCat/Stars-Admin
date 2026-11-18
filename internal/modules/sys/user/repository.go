@@ -123,15 +123,12 @@ func (r repository) remove(ctx context.Context, tx *gorm.DB, ids []model.ID, act
 	}
 	return db.Delete(&user{}, "id IN ?", ids).Error
 }
-func (r repository) members(ctx context.Context, tx *gorm.DB) ([]userRole, []model.ID, error) {
-	db := r.conn(ctx, tx)
+func (r repository) members(ctx context.Context, tx *gorm.DB) ([]userRole, error) {
 	var rows []userRole
-	var ids []model.ID
-	if err := db.Find(&rows).Error; err != nil {
-		return nil, nil, err
-	}
-	err := db.Model(&user{}).Where("status = ?", 1).Pluck("id", &ids).Error
-	return rows, ids, err
+	err := r.conn(ctx, tx).Model(&userRole{}).
+		Joins("JOIN sys_user ON sys_user.id = sys_user_role.user_id AND sys_user.deleted_at IS NULL").
+		Where("sys_user.status = ?", 1).Find(&rows).Error
+	return rows, err
 }
 func (r repository) login(ctx context.Context, id model.ID, ip string) error {
 	return r.conn(ctx, nil).Model(&user{}).Where("id = ?", id).Updates(map[string]any{"login_ip": ip, "login_at": time.Now().UTC()}).Error

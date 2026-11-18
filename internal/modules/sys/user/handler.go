@@ -86,6 +86,7 @@ func (h *Handler) Create(c *gin.Context) {
 
 // Update 编辑用户资料。
 // @Summary 编辑用户资料
+// @Description 普通用户修改本人部门时，新数据范围必须包含于原范围。
 // @Tags 用户管理
 // @Security BearerAuth
 // @Accept json

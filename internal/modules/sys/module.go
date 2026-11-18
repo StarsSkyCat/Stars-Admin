@@ -57,18 +57,20 @@ type features struct {
 	depts *dept.Service
 }
 
-func assemble(deps core.Deps, gate *security.Manager) features {
-	depts := dept.New(deps.DB, deps.IDs, gate)
-	menus := menu.New(deps.DB, deps.IDs, gate)
-	roles := role.New(deps.DB, deps.IDs, gate, menus, depts)
-	users := user.New(deps.DB, deps.IDs, gate, roles, depts, deps.Config.Auth.BcryptCost)
-	depts.SetUsers(users)
-	menus.SetRoles(roles)
-	roles.SetUsers(users)
-	f := features{users, roles, menus, depts}
+func assemble(deps core.Deps, gate *security.Manager) *features {
+	f := new(features)
 	resolver := scopeResolver{f}
-	users.SetScopeResolver(resolver)
-	depts.SetScopeResolver(resolver)
+	var access security.ScopeAccess
+	if gate != nil {
+		access = security.NewScopeAccess(gate, resolver)
+	}
+	f.depts = dept.New(deps.DB, deps.IDs, gate, access)
+	f.menus = menu.New(deps.DB, deps.IDs, gate)
+	f.roles = role.New(deps.DB, deps.IDs, gate, f.menus, f.depts)
+	f.users = user.New(deps.DB, deps.IDs, gate, f.roles, f.depts, access, deps.Config.Auth.BcryptCost)
+	f.depts.SetUsers(f.users)
+	f.menus.SetRoles(f.roles)
+	f.roles.SetUsers(f.users)
 	return f
 }
 

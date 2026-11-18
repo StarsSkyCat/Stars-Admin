@@ -3,6 +3,7 @@ package user
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -129,9 +130,16 @@ func (s *Service) Import(ctx context.Context, p security.Principal, data []byte)
 	}
 	validationFailed := errors.New("导入行校验失败")
 	err = s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
-		scoped, e := s.scopeContext(ctx, tx, p, "sys:user:import")
+		scoped, e := s.access.Context(ctx, tx, p, "sys:user:import")
 		if e != nil {
 			return nil, e
+		}
+		if slices.ContainsFunc(rows, func(row importRow) bool {
+			return len(row.roles) != 0 || len(row.posts) != 0
+		}) {
+			if e := s.gate.Allow(p, "sys:user:grant"); e != nil {
+				return nil, e
+			}
 		}
 		for i, row := range rows {
 			var rowErr error
@@ -213,17 +221,14 @@ func (s *Service) Import(ctx context.Context, p security.Principal, data []byte)
 	return result, nil
 }
 
-// Export 以同一范围输出用户资料，最多一万行，不包含密码或会话材料。
-func (s *Service) export(ctx context.Context, q Query) ([]byte, error) {
-	var err error
-	ctx, err = s.scopeContext(ctx, nil, security.Actor(ctx))
-	if err != nil {
+// Export 在同一次安全读取中授权并查询，释放读锁后编码表格。
+func (s *Service) Export(ctx context.Context, q Query) ([]byte, error) {
+	if err := q.Normalize(); err != nil {
 		return nil, err
 	}
-	if err = q.Normalize(); err != nil {
-		return nil, err
-	}
-	rows, err := s.repo.export(ctx, q)
+	rows, err := s.access.Read(ctx, security.Actor(ctx), "sys:user:export", func(scoped context.Context) ([]user, error) {
+		return s.repo.export(scoped, q)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -242,11 +247,4 @@ func (s *Service) export(ctx context.Context, q Query) ([]byte, error) {
 		out = append(out, []string{strconv.FormatInt(int64(r.ID), 10), r.Username, r.Nickname, dept, email, phone, strconv.Itoa(r.Gender), strconv.Itoa(r.Status)})
 	}
 	return excel.Write(out)
-}
-
-// Export 在范围稳定的读取期间生成脱敏表格。
-func (s *Service) Export(ctx context.Context, q Query) ([]byte, error) {
-	var out []byte
-	err := s.read(func() error { var err error; out, err = s.export(ctx, q); return err })
-	return out, err
 }

@@ -76,6 +76,11 @@ func TestPostCommitFailureRollbackAndRestartRecovery(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	fp.fail.Store(true)
+	if err := gate.Update(t.Context(), func(*gorm.DB) ([]Revocation, error) { return nil, nil }); err != nil {
+		t.Fatalf("非策略变更触发策略重载：%v", err)
+	}
+	fp.fail.Store(false)
 	tokens := token.New("security-test-secret", "security-test", time.Minute)
 	old, err := tokens.Issue(id, name, "", time.Now().Add(time.Hour), false)
 	if err != nil {

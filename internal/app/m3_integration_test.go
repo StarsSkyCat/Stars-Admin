@@ -188,6 +188,50 @@ func TestM3FiveScopesUnionAndObjectWriteBoundaries(t *testing.T) {
 		t.Fatal("自定义有效集合为空时未默认拒绝")
 	}
 }
+func TestM3ScopedEditsAndImportRequireCurrentAuthority(t *testing.T) {
+	a := seedApp(t)
+	admin := adminLogin(t, a)
+	if err := a.db.ORM.Exec("INSERT INTO sys_dept(id,name,ancestors,parent_id) VALUES(10,'本部','0',0),(20,'外部','0',0),(21,'外部下级','0,20',20)").Error; err != nil {
+		t.Fatal(err)
+	}
+	deptRole := objectID(t, callAPI(t, a, "POST", "/api/sys/roles", map[string]string{"name": "部门范围", "code": "dept_scope"}, admin.AccessToken))
+	customRole := objectID(t, callAPI(t, a, "POST", "/api/sys/roles", map[string]string{"name": "自定义范围", "code": "custom_scope"}, admin.AccessToken))
+	selfRole := objectID(t, callAPI(t, a, "POST", "/api/sys/roles", map[string]string{"name": "仅本人", "code": "self_scope"}, admin.AccessToken))
+	grantPermissions(t, a, admin, deptRole, "sys:user:edit", "sys:user:import")
+	requireCode(t, callAPI(t, a, "PUT", "/api/sys/roles/"+deptRole+"/data-scope", map[string]any{"dataScope": 4, "deptIds": []string{}}, admin.AccessToken), 200, 0)
+	requireCode(t, callAPI(t, a, "PUT", "/api/sys/roles/"+customRole+"/data-scope", map[string]any{"dataScope": 2, "deptIds": []string{"20"}}, admin.AccessToken), 200, 0)
+	id, _ := createMember(t, a, admin, "scoped_editor", "10", deptRole)
+	requireCode(t, callAPI(t, a, "PUT", "/api/sys/users/"+id+"/roles", map[string]any{"roleIds": []string{deptRole, customRole, selfRole}}, admin.AccessToken), 200, 0)
+	member := loginUser(t, a, "scoped_editor", changedPassword)
+	edit := map[string]any{"username": "scoped_editor", "nickname": "新昵称", "deptId": "20"}
+	requireCode(t, callAPI(t, a, "PUT", "/api/sys/users/"+id, edit, member.AccessToken), 403, 2004)
+	view := callAPI(t, a, "GET", "/api/sys/users/"+id, nil, admin.AccessToken).As[user.View](t)
+	if view.DeptID == nil || *view.DeptID != 10 || view.Nickname != "scoped_editor" {
+		t.Fatal("越权拒绝后用户资料未整体回滚")
+	}
+
+	rows := [][]string{
+		{"username", "nickname", "password", "deptId", "roleIds", "postIds", "email", "phone", "gender"},
+		{"import_plain", "普通成员", firstPassword, "10", "", "", "", "", "0"},
+		{"import_roles", "带角色成员", firstPassword, "10", selfRole, "", "", "", "0"},
+	}
+	upload := func(rows [][]string) apiReply {
+		t.Helper()
+		data, err := excel.Write(rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return replyOf(t, uploadAPI(t, a, "/api/sys/users/import", "users.xlsx", data, member.AccessToken))
+	}
+	requireCode(t, upload(rows), 403, 2004)
+	requireCode(t, upload(rows[:2]), 200, 0)
+	var imported int64
+	err := a.db.ORM.Table("sys_user").Where("username IN ?", []string{"import_plain", "import_roles"}).Count(&imported).Error
+	if err != nil || imported != 1 {
+		t.Fatalf("导入授权或整批回滚错误：%d，%v", imported, err)
+	}
+}
+
 func TestM3CachingPostsImportAndAudit(t *testing.T) {
 	a := seedApp(t)
 	admin := adminLogin(t, a)

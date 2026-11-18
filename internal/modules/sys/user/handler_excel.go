@@ -12,6 +12,7 @@ import (
 
 // Import 导入 Excel，错误行明细不包含原始单元格内容。
 // @Summary 批量导入用户
+// @Description 导入行包含角色或岗位时，还需 sys:user:grant 权限。
 // @Tags 用户管理
 // @Security BearerAuth
 // @Accept multipart/form-data

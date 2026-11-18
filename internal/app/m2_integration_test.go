@@ -322,6 +322,10 @@ func TestM2CaptchaLockoutAndDependencyFailure(t *testing.T) {
 	if a.cache.Exists(t.Context(), a.cfg.Redis.KeyPrefix+"captcha:"+captchaImage.UUID).Val() != 0 {
 		t.Fatal("错误验证码也必须一次性消费")
 	}
+	nameKey := a.cfg.Redis.KeyPrefix + "limit:auth:login:name:" + session.Digest("admin")
+	if count, err := a.cache.Exists(t.Context(), nameKey).Result(); err != nil || count != 0 {
+		t.Fatalf("错误验证码消耗了账号登录额度：%d，%v", count, err)
+	}
 	id := uuid.New().String()
 	if err := a.cache.Set(t.Context(), a.cfg.Redis.KeyPrefix+"captcha:"+id, session.Digest("123456"), time.Minute).Err(); err != nil {
 		t.Fatal(err)

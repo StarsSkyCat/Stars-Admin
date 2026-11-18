@@ -11,22 +11,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// SetScopeResolver 接入业务范围解析。
-func (s *Service) SetScopeResolver(r security.Resolver) { s.scopes = r }
-func (s *Service) scopeContext(ctx context.Context, tx *gorm.DB, p security.Principal, permissions ...string) (context.Context, error) {
-	if s.scopes == nil {
-		return ctx, nil
-	}
-	scope, err := s.scopes.Resolve(ctx, tx, p)
-	if err == nil && tx != nil && len(permissions) > 0 {
-		if checker, ok := s.gate.(interface {
-			Allow(security.Principal, string) error
-		}); ok {
-			err = checker.Allow(p, permissions[0])
-		}
-	}
-	return security.WithScope(ctx, scope), err
-}
 func checkDepartment(ctx context.Context, id model.ID) error {
 	if scope, ok := security.CurrentScope(ctx); ok && !scope.AllowsDepartment(id) {
 		return response.ErrPermission
@@ -84,30 +68,21 @@ func scopedTree(ctx context.Context, rows []department) []View {
 	return buildTree(filtered, 0)
 }
 
-func (s *Service) read(fn func() error) error {
-	if reader, ok := s.gate.(interface{ Read(func() error) error }); ok {
-		return reader.Read(fn)
-	}
-	return fn()
-}
-
 // List 在安全读锁内解析范围并查询，避免与范围收缩交错。
 func (s *Service) List(ctx context.Context, q Query) (response.Page[View], error) {
-	var out response.Page[View]
-	err := s.read(func() error { var err error; out, err = s.list(ctx, q); return err })
-	return out, err
+	return s.access.Read(ctx, security.Actor(ctx), "sys:dept:list", func(scoped context.Context) (response.Page[View], error) {
+		return s.list(scoped, q)
+	})
 }
 
 // Get 在同一次安全读取中完成对象范围检查。
 func (s *Service) Get(ctx context.Context, id model.ID) (View, error) {
-	var out View
-	err := s.read(func() error { var err error; out, err = s.get(ctx, id); return err })
-	return out, err
+	return s.access.Read(ctx, security.Actor(ctx), "sys:dept:get", func(scoped context.Context) (View, error) {
+		return s.get(scoped, id)
+	})
 }
 
 // Tree 在安全读锁内构造当前可见树。
 func (s *Service) Tree(ctx context.Context) ([]View, error) {
-	var out []View
-	err := s.read(func() error { var err error; out, err = s.tree(ctx); return err })
-	return out, err
+	return s.access.Read(ctx, security.Actor(ctx), "sys:dept:list", s.tree)
 }

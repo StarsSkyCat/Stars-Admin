@@ -61,7 +61,7 @@ func view(r file) View {
 	return View{r.ID, r.OriginalName, r.Size, r.Mime, "/api/sys/files/" + strconv.FormatInt(int64(r.ID), 10) + "/download", r.CreatedAt}
 }
 
-// Upload 通过内容嗅探与扩展名双白名单，写库失败清理已写文件。
+// Upload 校验双白名单，预登记补偿并在提交文件元数据时取消补偿。
 func (s *Service) Upload(ctx context.Context, p security.Principal, name string, r io.Reader) (View, error) {
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
 	if name == "." || name == "" || len([]rune(name)) > 255 || strings.ContainsAny(name, "\r\n\x00") {
@@ -96,13 +96,19 @@ func (s *Service) Upload(ctx context.Context, p security.Principal, name string,
 		return View{}, err
 	}
 	key := strconv.FormatInt(n, 10) + ext
+	task := cleanup{ID: model.ID(n), Path: key, Storage: "local", NextAttempt: time.Now().UTC()}
+	if err := s.repo.queue(ctx, task); err != nil {
+		return View{}, err
+	}
 	path, err := s.storage.Save(ctx, key, bytes.NewReader(body))
 	if err != nil {
 		return View{}, err
 	}
 	row := file{ID: model.ID(n), CreatedBy: p.ID, UpdatedBy: p.ID, Name: key, OriginalName: name, Path: path, Size: int64(len(body)), Mime: mime, Storage: "local", Hash: digest}
-	if err := s.repo.create(ctx, &row); err != nil {
-		s.compensate(path)
+	if err := s.repo.create(ctx, &row, task.ID); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		s.clean(cleanupCtx, task.ID)
+		cancel()
 		if errors.Is(httpx.DBError(err), response.ErrConflict) {
 			old, e := s.repo.hash(ctx, p.ID, digest)
 			if e == nil {
@@ -166,21 +172,6 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, id model.ID)
 	}
 	return err
 }
-func (s *Service) compensate(path string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	if err := s.storage.Delete(ctx, path); err != nil {
-		n, e := s.ids.Next()
-		if e == nil {
-			e = s.repo.queue(ctx, cleanup{ID: model.ID(n), Path: path, Storage: "local", NextAttempt: time.Now().UTC()})
-		}
-		if e != nil {
-			s.log.Error("上传失败后的文件清理与补偿记录写入均失败")
-		} else {
-			s.log.Warn("上传文件清理等待补偿")
-		}
-	}
-}
 func (s *Service) flush() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -192,16 +183,38 @@ func (s *Service) flush() {
 		return
 	}
 	for _, row := range rows {
+		s.clean(ctx, row.ID)
+	}
+}
+
+func (s *Service) clean(ctx context.Context, id model.ID) {
+	err := s.repo.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 上传提交会在同一事务中删除此记录，行锁等待事务结果明确。
+		row, err := s.repo.lockCleanup(ctx, tx, id)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
 		if row.Storage != "local" {
 			s.log.Error("文件补偿存储驱动不可用")
-			continue
+			return s.repo.retry(ctx, tx, row)
 		}
-		if err := s.storage.Delete(ctx, row.Path); err != nil {
-			_ = s.repo.retry(ctx, row)
-			s.log.Warn("文件物理删除失败，已保留补偿记录")
-		} else if err := s.repo.done(ctx, row.ID); err != nil {
-			s.log.Warn("文件补偿确认失败，后续幂等重试")
+		active, err := s.repo.activePath(ctx, tx, row.Storage, row.Path)
+		if err != nil {
+			return err
 		}
+		if !active {
+			if err := s.storage.Delete(ctx, row.Path); err != nil {
+				s.log.Warn("文件物理删除失败，继续等待补偿")
+				return s.repo.retry(ctx, tx, row)
+			}
+		}
+		return s.repo.done(ctx, tx, row.ID)
+	})
+	if err != nil {
+		s.log.Warn("文件补偿未完成，后续重试")
 	}
 }
 

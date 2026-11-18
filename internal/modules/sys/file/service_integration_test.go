@@ -10,8 +10,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/config"
+	"github.com/StarsSkyCat/Stars-Admin/internal/core/model"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
 	"github.com/StarsSkyCat/Stars-Admin/internal/testutil"
 )
@@ -19,6 +21,52 @@ import (
 type failingDelete struct {
 	Storage
 	fail atomic.Bool
+}
+
+func TestCommittedUploadSurvivesCompensation(t *testing.T) {
+	cfg, err := config.Load("../../../../configs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := testutil.Open(t, cfg)
+	storage, err := NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(deps.DB, storage, deps.IDs, cfg.File, deps.Logger)
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	p := security.Principal{ID: 777}
+	view, err := s.Upload(t.Context(), p, "committed.txt", strings.NewReader("commit fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟调用方遗失成功回执后尝试补偿已提交的上传。
+	s.clean(t.Context(), view.ID)
+	row, err := s.repo.get(t.Context(), nil, view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskID, err := deps.IDs.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := cleanup{ID: model.ID(taskID), Path: row.Path, Storage: row.Storage, NextAttempt: time.Now().UTC()}
+	if err := s.repo.queue(t.Context(), task); err != nil {
+		t.Fatal(err)
+	}
+	s.clean(t.Context(), task.ID)
+	out, err := s.Download(t.Context(), p, view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, readErr := io.ReadAll(out.Body)
+	if err := errors.Join(readErr, out.Body.Close()); err != nil || string(body) != "commit fixture" {
+		t.Fatalf("有效上传被补偿清理：%v", err)
+	}
 }
 
 func (s *failingDelete) Delete(ctx context.Context, path string) error {

@@ -19,6 +19,7 @@ import (
 type idSource interface{ Next() (int64, error) }
 type changeGate interface {
 	Change(context.Context, func(*gorm.DB) ([]security.Revocation, error)) error
+	Update(context.Context, func(*gorm.DB) ([]security.Revocation, error)) error
 	Allow(security.Principal, string) error
 }
 
@@ -42,22 +43,17 @@ type Service struct {
 	roles  Roles
 	depts  Departments
 	cost   int
-	scopes security.Resolver
+	access security.ScopeAccess
 	posts  Posts
 }
 
 // New 创建用户业务，哈希成本由应用配置决定。
-func New(db *gorm.DB, ids idSource, gate changeGate, roles Roles, depts Departments, cost int) *Service {
-	return &Service{repo: repository{db}, ids: ids, gate: gate, roles: roles, depts: depts, cost: cost}
+func New(db *gorm.DB, ids idSource, gate changeGate, roles Roles, depts Departments, access security.ScopeAccess, cost int) *Service {
+	return &Service{repo: repository{db}, ids: ids, gate: gate, roles: roles, depts: depts, access: access, cost: cost}
 }
 
-// List 返回不含哈希的分页资料。
+// list 查询已授权范围内的分页资料。
 func (s *Service) list(ctx context.Context, q Query) (response.Page[View], error) {
-	var scopeErr error
-	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
-	if scopeErr != nil {
-		return response.Page[View]{}, scopeErr
-	}
 	if err := q.Normalize(); err != nil {
 		return response.Page[View]{}, err
 	}
@@ -69,13 +65,8 @@ func (s *Service) list(ctx context.Context, q Query) (response.Page[View], error
 	return out, err
 }
 
-// Get 查询详情及角色 ID，不输出认证版本。
+// get 查询已授权范围内的用户详情及关联。
 func (s *Service) get(ctx context.Context, id model.ID) (View, error) {
-	var scopeErr error
-	ctx, scopeErr = s.scopeContext(ctx, nil, security.Actor(ctx))
-	if scopeErr != nil {
-		return View{}, scopeErr
-	}
 	row, err := s.repo.get(ctx, nil, id)
 	if err != nil {
 		return View{}, httpx.DBError(err)
@@ -110,13 +101,13 @@ func (s *Service) save(ctx context.Context, p security.Principal, id model.ID, i
 		return View{}, response.ErrPermission
 	}
 	var out user
-	err := s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+	err := s.gate.Update(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
 		perm := "sys:user:edit"
 		if id == 0 {
 			perm = "sys:user:add"
 		}
-		var scopeErr error
-		ctx, scopeErr = s.scopeContext(ctx, tx, p, perm)
+		unscoped := ctx
+		ctx, scopeErr := s.access.Context(ctx, tx, p, perm)
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
@@ -170,6 +161,8 @@ func (s *Service) save(ctx context.Context, p security.Principal, id model.ID, i
 				return nil, response.ErrPermission
 			}
 		}
+		scope, _ := security.CurrentScope(ctx)
+		movingSelf := id == p.ID && !scope.All && in.DeptID != nil && (out.DeptID == nil || *out.DeptID != *in.DeptID)
 		out.Username = in.Username
 		out.Nickname = strings.TrimSpace(in.Nickname)
 		out.Email = in.Email
@@ -181,6 +174,19 @@ func (s *Service) save(ctx context.Context, p security.Principal, id model.ID, i
 		out.UpdatedBy = p.ID
 		if err := s.repo.save(ctx, tx, &out, id == 0); err != nil {
 			return nil, httpx.DBError(err)
+		}
+		if movingSelf {
+			// 按事务内的新部门重新计算，任何新增可见部门都要求管理员授权。
+			updated, err := s.access.Context(unscoped, tx, p, perm)
+			if err != nil {
+				return nil, err
+			}
+			next, _ := security.CurrentScope(updated)
+			if next.All || slices.ContainsFunc(next.Departments, func(dept model.ID) bool {
+				return !scope.AllowsDepartment(dept)
+			}) {
+				return nil, response.ErrPermission
+			}
 		}
 		if id != 0 {
 			return s.repo.bump(ctx, tx, []model.ID{id})
@@ -200,7 +206,7 @@ func (s *Service) Status(ctx context.Context, p security.Principal, id model.ID,
 	}
 	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
 		var scopeErr error
-		ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:user:edit")
+		ctx, scopeErr = s.access.Context(ctx, tx, p, "sys:user:edit")
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
@@ -240,10 +246,10 @@ func (s *Service) password(ctx context.Context, p security.Principal, id model.I
 	if err != nil {
 		return response.ErrInvalidParam
 	}
-	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
+	return s.gate.Update(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
 		var scopeErr error
 		if reset {
-			ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:user:resetPwd")
+			ctx, scopeErr = s.access.Context(ctx, tx, p, "sys:user:resetPwd")
 		} else {
 			ctx = security.WithScope(ctx, security.Scope{Self: true, UserID: p.ID})
 		}
@@ -294,7 +300,7 @@ func (s *Service) GrantRoles(ctx context.Context, p security.Principal, id model
 	}
 	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
 		var scopeErr error
-		ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:user:grant")
+		ctx, scopeErr = s.access.Context(ctx, tx, p, "sys:user:grant")
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
@@ -332,7 +338,7 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, ids []model.
 	}
 	return s.gate.Change(ctx, func(tx *gorm.DB) ([]security.Revocation, error) {
 		var scopeErr error
-		ctx, scopeErr = s.scopeContext(ctx, tx, p, "sys:user:remove")
+		ctx, scopeErr = s.access.Context(ctx, tx, p, "sys:user:remove")
 		if scopeErr != nil {
 			return nil, scopeErr
 		}
@@ -407,15 +413,13 @@ func (s *Service) RevokeRoles(ctx context.Context, tx *gorm.DB, ids []model.ID) 
 
 // Memberships 提供仅属于有效用户的授权边。
 func (s *Service) Memberships(ctx context.Context, tx *gorm.DB) ([]permission.Membership, error) {
-	rows, active, err := s.repo.members(ctx, tx)
+	rows, err := s.repo.members(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	out := []permission.Membership{}
+	out := make([]permission.Membership, 0, len(rows))
 	for _, row := range rows {
-		if slices.Contains(active, row.UserID) {
-			out = append(out, permission.Membership{UserID: int64(row.UserID), RoleID: int64(row.RoleID)})
-		}
+		out = append(out, permission.Membership{UserID: int64(row.UserID), RoleID: int64(row.RoleID)})
 	}
 	return out, nil
 }
