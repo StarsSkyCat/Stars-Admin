@@ -6,7 +6,7 @@ import (
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/httpx"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/response"
 	"github.com/StarsSkyCat/Stars-Admin/internal/core/security"
-	token "github.com/StarsSkyCat/Stars-Admin/pkg/jwt"
+	authjwt "github.com/StarsSkyCat/Stars-Admin/pkg/jwt"
 	"github.com/gin-gonic/gin"
 )
 
@@ -78,7 +78,7 @@ func (h *Handler) Captcha(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param body body LoginInput true "登录信息"
-// @Success 200 {object} response.Body[token.Tokens]
+// @Success 200 {object} response.Body[authjwt.Tokens]
 // @Failure 400,401,403,429,503 {object} response.Body[any]
 // @Router /sys/auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
@@ -101,7 +101,7 @@ func (h *Handler) Login(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param body body RefreshInput true "刷新令牌"
-// @Success 200 {object} response.Body[token.Tokens]
+// @Success 200 {object} response.Body[authjwt.Tokens]
 // @Failure 400,401,429,503 {object} response.Body[any]
 // @Router /sys/auth/refresh [post]
 func (h *Handler) Refresh(c *gin.Context) {
@@ -128,7 +128,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 // @Router /sys/auth/logout [post]
 func (h *Handler) Logout(c *gin.Context) {
 	value, _ := c.Get("claims")
-	claims, ok := value.(*token.Claims)
+	claims, ok := value.(*authjwt.Claims)
 	if !ok {
 		response.Fail(c, response.ErrUnauthenticated)
 		return

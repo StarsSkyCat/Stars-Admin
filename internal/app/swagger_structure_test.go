@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json/v2"
+	"strings"
 	"testing"
 
 	"github.com/swaggo/swag"
@@ -45,6 +46,47 @@ func TestSwaggerStructureAndProtectedOperations(t *testing.T) {
 		for method, op := range ops {
 			if len(op.Security) == 0 || len(op.Responses) == 0 {
 				t.Fatalf("受保护接口未声明授权或响应 %s %s", method, path)
+			}
+		}
+	}
+}
+
+func TestSwaggerTokenResponsesMatchAuthenticationWireContract(t *testing.T) {
+	type schema struct {
+		Ref        string            `json:"$ref"`
+		Type       string            `json:"type"`
+		Properties map[string]schema `json:"properties"`
+	}
+	var doc struct {
+		Definitions map[string]schema `json:"definitions"`
+		Paths       map[string]map[string]struct {
+			Responses map[string]struct {
+				Schema schema `json:"schema"`
+			} `json:"responses"`
+		} `json:"paths"`
+	}
+	raw, err := swag.ReadDoc()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(raw), &doc); err != nil {
+		t.Fatal(err)
+	}
+	resolve := func(s schema) schema {
+		if name, ok := strings.CutPrefix(s.Ref, "#/definitions/"); ok {
+			return doc.Definitions[name]
+		}
+		return s
+	}
+	for _, path := range []string{"/sys/auth/login", "/sys/auth/refresh"} {
+		body := resolve(doc.Paths[path]["post"].Responses["200"].Schema)
+		data := resolve(body.Properties["data"])
+		if data.Type != "object" || len(data.Properties) != 5 {
+			t.Fatalf("%s 令牌响应被解析成错误的同名依赖类型", path)
+		}
+		for name, kind := range map[string]string{"accessToken": "string", "refreshToken": "string", "tokenType": "string", "expiresIn": "integer", "mustChangePassword": "boolean"} {
+			if data.Properties[name].Type != kind {
+				t.Fatalf("%s 缺少正确的 %s 类型", path, name)
 			}
 		}
 	}

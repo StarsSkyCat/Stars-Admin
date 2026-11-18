@@ -56,6 +56,20 @@ unset STARS_SEED_ADMIN_PASSWORD
 
 开发端口默认 HTTP `8080`、PostgreSQL `5432`、Redis `6379`；可通过 `STARS_HTTP_PORT`、`STARS_PG_PORT`、`STARS_REDIS_PORT` 调整宿主映射。`./scripts/dev.sh dev-down` 停止开发基础服务并保留数据卷。
 
+### 浏览器提示“未发送任何数据”时
+
+先看启动终端，确认出现 `HTTP 服务已启动`。Air 的 `running...` 只表示尝试启动子进程；如果随后出现 `Process Exit with Code: 1`，后端已经退出，容器仍可能占着8080，浏览器因此收到空响应。
+
+若日志提示“迁移未就绪：当前版本……期望版本……”，先用Ctrl+C停止这次启动，再执行：
+
+```sh
+./scripts/dev.sh migrate-status
+./scripts/dev.sh migrate-up
+./scripts/dev.sh run
+```
+
+更新代码后也需检查是否有新增迁移。`run` 不自动升级数据库或初始化用户，`dev-env` 只启动基础服务；前台运行时请保持终端打开。服务启动后可用 `curl -fsS http://127.0.0.1:8080/api/health/ready` 验证就绪，再打开Swagger。若接口正常而Swagger返回404，检查是否使用了关闭Swagger的环境配置。
+
 ## 不使用 Docker 启动
 
 先在本机安装并启动 PostgreSQL、Redis，创建开发账号与数据库；例如以 PG 管理员身份执行以下 SQL，密码自行设置：
