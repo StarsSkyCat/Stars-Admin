@@ -64,7 +64,7 @@ function createRouterGuard(router: Router, resetRoutes: () => void) {
     const resolved = router.resolve(to.fullPath);
     if (
       resolved.name === 'FallbackNotFound' &&
-      /^\/(?:system|menu-groups)(?:\/|$)/i.test(to.path)
+      /^\/(?:gen|job|system|menu-groups)(?:\/|$)/i.test(to.path)
     ) {
       return { name: 'Forbidden' };
     }

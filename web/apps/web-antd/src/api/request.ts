@@ -151,3 +151,15 @@ export function request<T>(url: string, options: Options = {}) {
 export function download(url: string, options: Options) {
   return authenticated(url, options, readDownload, true);
 }
+
+export function downloadAttachment(url: string) {
+  return authenticated(
+    url,
+    {},
+    async (response: HttpResponse<Blob>) => ({
+      blob: await readDownload(response),
+      disposition: response.headers['content-disposition'],
+    }),
+    true,
+  );
+}

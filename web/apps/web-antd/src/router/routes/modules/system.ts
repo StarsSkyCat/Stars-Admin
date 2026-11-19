@@ -1,4 +1,26 @@
 export const systemPages = {
+  audit: {
+    adminOnly: true,
+    component: () => import('#/views/system/audit/index.vue'),
+    componentKey: '/system/audit/index',
+    icon: 'lucide:clipboard-list',
+    legacyPath: '/system/audit',
+    name: 'SystemAudit',
+    path: '/system/audit',
+    permission: 'sys:audit:operList',
+    title: '日志审计',
+  },
+  configs: {
+    adminOnly: true,
+    component: () => import('#/views/system/configs/index.vue'),
+    componentKey: '/system/configs/index',
+    icon: 'lucide:sliders-horizontal',
+    legacyPath: '/system/config',
+    name: 'SystemConfigs',
+    path: '/system/configs',
+    permission: 'sys:config:list',
+    title: '参数管理',
+  },
   departments: {
     adminOnly: false,
     component: () => import('#/views/system/departments/index.vue'),
@@ -10,6 +32,28 @@ export const systemPages = {
     permission: 'sys:dept:list',
     title: '部门管理',
   },
+  dictionaries: {
+    adminOnly: true,
+    component: () => import('#/views/system/dictionaries/index.vue'),
+    componentKey: '/system/dictionaries/index',
+    icon: 'lucide:book-open',
+    legacyPath: '/system/dict',
+    name: 'SystemDictionaries',
+    path: '/system/dictionaries',
+    permission: 'sys:dict:list',
+    title: '字典管理',
+  },
+  files: {
+    adminOnly: false,
+    component: () => import('#/views/system/files/index.vue'),
+    componentKey: '/system/files/index',
+    icon: 'lucide:folder-open',
+    legacyPath: '/system/file',
+    name: 'SystemFiles',
+    path: '/system/files',
+    permission: ['sys:file:add', 'sys:file:get', 'sys:file:remove'],
+    title: '文件管理',
+  },
   menus: {
     adminOnly: true,
     component: () => import('#/views/system/menus/index.vue'),
@@ -20,6 +64,17 @@ export const systemPages = {
     path: '/system/menus',
     permission: 'sys:menu:list',
     title: '菜单管理',
+  },
+  posts: {
+    adminOnly: true,
+    component: () => import('#/views/system/posts/index.vue'),
+    componentKey: '/system/posts/index',
+    icon: 'lucide:briefcase-business',
+    legacyPath: '/system/post',
+    name: 'SystemPosts',
+    path: '/system/posts',
+    permission: 'sys:post:list',
+    title: '岗位管理',
   },
   roles: {
     adminOnly: true,
@@ -44,3 +99,46 @@ export const systemPages = {
     title: '用户管理',
   },
 } as const;
+
+export const jobPages = {
+  logs: {
+    adminOnly: true,
+    component: () => import('#/views/job/logs/index.vue'),
+    componentKey: '/job/logs/index',
+    icon: 'lucide:scroll-text',
+    legacyPath: '/job/log',
+    name: 'JobLogs',
+    path: '/job/logs',
+    permission: 'job:log:list',
+    title: '任务日志',
+  },
+  tasks: {
+    adminOnly: true,
+    component: () => import('#/views/job/tasks/index.vue'),
+    componentKey: '/job/tasks/index',
+    icon: 'lucide:timer',
+    legacyPath: '/job/task',
+    name: 'JobTasks',
+    path: '/job/tasks',
+    permission: 'job:task:list',
+    title: '定时任务',
+  },
+} as const;
+
+export const generationPage = {
+  adminOnly: true,
+  component: () => import('#/views/gen/tables/index.vue'),
+  componentKey: '/gen/tables/index',
+  icon: 'lucide:code',
+  legacyPath: '/gen/table',
+  name: 'GeneratorTables',
+  path: '/gen/tables',
+  permission: 'gen:table:list',
+  title: '代码生成',
+} as const;
+
+export const registeredPages = [
+  ...Object.values(systemPages),
+  ...Object.values(jobPages),
+  generationPage,
+];

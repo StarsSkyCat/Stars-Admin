@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { canAccess, createAccessRoutes, mountAccessRoutes } from './access';
 import { authRedirect, CHANGE_PASSWORD_PATH, HOME_PATH } from './policy';
-import { systemPages } from './routes/modules/system';
+import { generationPage, jobPages, systemPages } from './routes/modules/system';
 
 const { departments, users } = systemPages;
 const userMenu: ProfileMenu = {
@@ -152,5 +152,49 @@ describe('应用路由权限', () => {
     const admin = routesFor({ ...account, roleIds: ['1'] }).router;
     expect(admin.resolve(menus.path).name).toBe(menus.name);
     expect(admin.resolve(roles.path).name).toBe(roles.name);
+  });
+
+  it('按文件动作和管理员角色分别开放新页面，并限制页面路由命名空间', () => {
+    const { files } = systemPages;
+    const menu = (
+      page: typeof files | typeof generationPage | typeof jobPages.tasks,
+      id: string,
+    ) => ({
+      ...userMenu,
+      component: null,
+      id,
+      path: page.legacyPath,
+    });
+    const menus = [
+      menu(files, '10'),
+      menu(jobPages.tasks, '11'),
+      menu(generationPage, '12'),
+    ];
+    const account = {
+      ...profile,
+      menus,
+      permissions: ['sys:file:remove', 'job:task:list', 'gen:table:list'],
+    };
+    const ordinary = routesFor(account).router;
+    expect(ordinary.resolve(files.path).name).toBe(files.name);
+    expect(ordinary.resolve(jobPages.tasks.path).name).toBe('FallbackNotFound');
+    expect(ordinary.resolve(generationPage.path).name).toBe('FallbackNotFound');
+    const admin = { ...account, roleIds: ['1'] };
+    expect(routesFor(admin).router.resolve(jobPages.tasks.path).name).toBe(
+      jobPages.tasks.name,
+    );
+    expect(routesFor(admin).router.resolve(generationPage.path).name).toBe(
+      generationPage.name,
+    );
+    const misplaced = {
+      ...menu(jobPages.tasks, '11'),
+      component: jobPages.tasks.componentKey,
+      path: '/system/misplaced',
+    };
+    expect(
+      routesFor({ ...admin, menus: [misplaced] }).router.hasRoute(
+        jobPages.tasks.name,
+      ),
+    ).toBe(false);
   });
 });

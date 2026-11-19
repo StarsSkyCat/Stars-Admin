@@ -46,6 +46,8 @@
 # 前端本地环境、日志和 Vite 临时文件
 /web/**/*.local
 /web/**/logs
+!/web/apps/web-antd/src/api/job/logs/
+!/web/apps/web-antd/src/views/job/logs/
 /web/**/*.log
 /web/**/npm-debug.log*
 /web/**/yarn-debug.log*

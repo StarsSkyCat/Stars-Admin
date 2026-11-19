@@ -10,7 +10,7 @@ import { message } from 'ant-design-vue';
 
 import { useVbenForm, z } from '#/adapter/form';
 import { createMenu, updateMenu } from '#/api/system/menus';
-import { systemPages } from '#/router/routes/modules/system';
+import { registeredPages } from '#/router/routes/modules/system';
 
 import { optionalText, showError, statusOptions } from '../shared';
 
@@ -24,7 +24,7 @@ const menuTypes = [
   { label: '页面', value: 2 },
   { label: '按钮', value: 3 },
 ];
-const components = Object.values(systemPages).map((page) => ({
+const components = registeredPages.map((page) => ({
   label: page.title,
   value: page.componentKey,
 }));

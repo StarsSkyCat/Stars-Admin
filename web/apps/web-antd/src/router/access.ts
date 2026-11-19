@@ -5,16 +5,21 @@ import type { Profile, ProfileMenu } from '#/api/core/auth';
 import { generateMenus } from '@vben/utils';
 
 import dashboard from './routes/modules/dashboard';
-import { systemPages } from './routes/modules/system';
+import { registeredPages, systemPages } from './routes/modules/system';
 
-const registeredPages = Object.values(systemPages);
-const systemPath = /^\/system(?:\/[\da-z-]+)+$/;
+const managementPath = /^\/(?:gen|job|system)(?:\/[\da-z-]+)+$/;
 
-export function canAccess(profile: null | Profile, permission: string) {
+export function canAccess(
+  profile: null | Profile,
+  permission: readonly string[] | string,
+) {
   return (
     !!profile &&
     !profile.mustChangePassword &&
-    (profile.roleIds.includes('1') || profile.permissions.includes(permission))
+    (profile.roleIds.includes('1') ||
+      (typeof permission === 'string' ? [permission] : permission).some(
+        (code) => profile.permissions.includes(code),
+      ))
   );
 }
 
@@ -75,7 +80,8 @@ export function createAccessRoutes(profile: Profile): RouteRecordRaw[] {
           page !== declared && (path === page.path || path === page.legacyPath),
       );
       if (
-        !systemPath.test(path) ||
+        !managementPath.test(path) ||
+        path.split('/')[1] !== declared.path.split('/')[1] ||
         reserved ||
         usedPaths.has(path) ||
         usedNames.has(declared.name)
